@@ -1,0 +1,5 @@
+{
+  "build": {
+    "beforeBuildCommand": "pwsh -NonInteractive -ExecutionPolicy Bypass -File build-backend.ps1 && npm run build"
+  }
+}

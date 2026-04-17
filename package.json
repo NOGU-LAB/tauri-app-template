@@ -1,0 +1,33 @@
+{
+  "name": "tauri-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "backend:air": "cd backend && DEV_PORT=8765 ~/go/bin/air -c .air.toml"
+  },
+  "dependencies": {
+    "@fortawesome/fontawesome-svg-core": "^7.2.0",
+    "@fortawesome/free-brands-svg-icons": "^7.2.0",
+    "@fortawesome/free-solid-svg-icons": "^7.2.0",
+    "@fortawesome/react-fontawesome": "^3.3.0",
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-opener": "^2",
+    "bootstrap": "^5.3.8",
+    "react": "^19.1.0",
+    "react-bootstrap": "^2.10.10",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4"
+  }
+}

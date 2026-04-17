@@ -1,0 +1,25 @@
+# air の設定（Goホットリロード用）
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/backend ."
+  bin = "./tmp/backend"
+  delay = 500
+  exclude_dir = ["tmp"]
+  include_ext = ["go"]
+  kill_delay = "0s"
+  rerun = false
+  rerun_delay = 500
+
+[log]
+  main_only = false
+  time = false
+
+[color]
+  build = "yellow"
+  runner = "green"
+  watcher = "cyan"
+
+[screen]
+  clear_on_rebuild = false
