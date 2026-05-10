@@ -1,0 +1,65 @@
+# 行コードの統一ポリシー
+#
+# クロスプラットフォーム (macOS / Linux / Windows) で同じ Tauri + Go プロジェクトを
+# 触る際、Git の core.autocrlf 既定値が OS ごとに違うため、Windows で checkout
+# したファイルが CRLF になり、macOS 側の LF と差分が出てしまう。
+# その状態で git pull すると "Your local changes to the following files would be
+# overwritten by merge: ..." で blocked されることがある (Cargo.toml, *.json, *.toml
+# のように Tauri / Cargo / Vite が常時いじるファイルで頻発)。
+#
+# .gitattributes でファイルごとに明示することで、autocrlf 設定に依存せず常に
+# 同じ行コードでチェックアウトされる。
+
+# テキスト判定はデフォルト auto に任せつつ、ソースは LF で固定。
+* text=auto eol=lf
+
+# シェルスクリプトは LF 必須 (CRLF だと Linux/macOS の sh が動かない)
+*.sh text eol=lf
+
+# PowerShell スクリプトは CRLF が望ましい (Windows ネイティブの慣例)
+*.ps1 text eol=crlf
+
+# 設定ファイル類は LF で揃える (Tauri / Cargo の noisy diff 防止)
+*.toml text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# ソースコードは LF
+*.rs text eol=lf
+*.go text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.jsx text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md text eol=lf
+
+# バイナリ (Git に行コード変換させない)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.svg binary
+*.webp binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.exe binary
+*.dll binary
+*.dylib binary
+*.so binary
+*.a binary
+*.lib binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.tgz binary
+*.dmg binary
+*.pdf binary
