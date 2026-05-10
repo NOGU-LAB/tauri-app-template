@@ -326,6 +326,105 @@ npm install
 
 ---
 
+## Windows インストーラ (NSIS) のカスタマイズ
+
+本テンプレートは Windows 配布を **NSIS のみ** にしている (理由は [CLAUDE.md ハマりどころ #1](CLAUDE.md))。
+NSIS でも下記のような典型カスタマイズはほぼ全て対応可能。
+
+### 1. ライセンス規約 (EULA) を表示
+
+`tauri.conf.json` の `bundle.windows.nsis.license` に EULA ファイルを指定するだけで、
+MUI License Page が標準で挿入される (同意しないと次へ進めない動作付き)。
+
+```jsonc
+"bundle": {
+  "windows": {
+    "nsis": {
+      "license": "license/EULA.txt"   // .txt / .rtf 両対応
+    }
+  }
+}
+```
+
+### 2. プロダクトキー入力 (カスタムページ)
+
+Tauri 標準の組込みページには無いが、NSIS の `nsDialogs` でカスタムページを
+差し込めば実現できる。Tauri は `bundle.windows.nsis.template` で
+カスタム NSIS スクリプト (`.nsi`) を丸ごと差し替え可能。
+
+骨子:
+
+```nsis
+; installer-templates/installer.nsi
+!include "nsDialogs.nsh"
+!include "MUI2.nsh"
+
+!insertmacro MUI_PAGE_LICENSE "license/EULA.txt"
+Page custom ProductKeyPage ProductKeyLeave
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+
+Var ProductKey
+Function ProductKeyPage
+  nsDialogs::Create 1018
+  ${NSD_CreateLabel} 0 0 100% 12u "プロダクトキーを入力してください:"
+  ${NSD_CreateText}  0 20u 100% 12u ""
+  Pop $ProductKey
+  nsDialogs::Show
+FunctionEnd
+Function ProductKeyLeave
+  ${NSD_GetText} $ProductKey $0
+  ; 形式バリデート / オンライン認証 / レジストリ書込み 等をここで
+  WriteRegStr HKCU "Software\${PRODUCTNAME}" "ProductKey" "$0"
+FunctionEnd
+```
+
+```jsonc
+"bundle": {
+  "windows": {
+    "nsis": {
+      "template": "installer-templates/installer.nsi",
+      "license":  "license/EULA.txt"
+    }
+  }
+}
+```
+
+ベースは Tauri リポの
+[`tooling/bundler/src/bundle/windows/templates/installer.nsi`](https://github.com/tauri-apps/tauri/blob/dev/crates/tauri-bundler/src/bundle/windows/nsis/templates/installer.nsi)
+をコピーして `Page custom` を足すのが楽。
+
+### 3. その他のカスタマイズ可能項目
+
+`bundle.windows.nsis` 配下で指定できる主な項目:
+
+| 用途 | 設定キー |
+|---|---|
+| インストーラアイコン | `installerIcon` |
+| 上部バナー / サイド画像 (MUI) | `headerImage` / `sidebarImage` |
+| Per-user / Per-machine 切替 | `installMode` (`currentUser` / `perMachine` / `both`) |
+| インストール前後フック (NSIS マクロ差込) | `installerHooks` |
+| 言語選択ダイアログを出す | `displayLanguageSelector: true` |
+| 多言語ローカライズ (.nlf 差し替え) | `customLanguageFiles` |
+| 圧縮方式 | `compression` (`none` / `zlib` / `bzip2` / `lzma`) |
+
+公式リファレンス: [Tauri v2 Windows Bundle - NSIS](https://v2.tauri.app/distribute/windows-installer/#nsis)
+
+### 4. MSI が必要になった場合
+
+GPO 配布 / `.msp` パッチ配布 / 企業展開要件などで MSI が必要なケースは、
+`productName` を ASCII に保ったうえで `bundle.targets` に `"msi"` を追加する。
+NSIS と MSI は同時生成可能だが、productName が非 ASCII だと WiX (`light.exe`)
+が落ちるので注意。
+
+```jsonc
+"bundle": {
+  "targets": ["nsis", "msi", "deb", "appimage", "rpm", "app", "dmg"]
+}
+```
+
+---
+
 ## DBの差し替え方
 
 `backend/repository/` に新しい実装を追加し、`backend/main.go` のDI箇所を変更するだけ：
