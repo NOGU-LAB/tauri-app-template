@@ -18,6 +18,21 @@ func main() {
 	dbPath := flag.String("db", "", "SQLiteファイルパス（省略時はインメモリ）")
 	flag.Parse()
 
+	// 親プロセス (Tauri) の死活監視: stdin が閉じられたら親が落ちたと見なし
+	// 自己終了する。Tauri の CommandChild は明示 kill しない限り子を放置する
+	// 仕様で、強制終了 (taskkill /F、Activity Monitor の強制終了等) では
+	// Tauri の RunEvent::ExitRequested フックが呼ばれず Go プロセスがゾンビ
+	// 化する。stdin の EOF は親のプロセス終了で必ず観測できるので、これで
+	// 全ての終了経路に対して保険をかける。
+	//
+	// 通常運用では stdin に何も書かれないので Read はずっとブロックし、
+	// 親死亡時に EOF (or pipe closed) で抜ける → exit。DEV_PORT で立てる
+	// 開発モード (terminal 直起動) では stdin が tty なのでこのルートは
+	// 触られない。
+	if !isStdinTerminal() {
+		go monitorParentStdin()
+	}
+
 	port, err := resolvePort()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ポート取得エラー: %v\n", err)
@@ -87,4 +102,36 @@ func corsMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// monitorParentStdin は親プロセスの死活を stdin の EOF で検知する。
+// Tauri が sidecar を spawn すると stdin は親へのパイプになる。親が死ぬと
+// パイプが閉じて Read が EOF / err を返すので、それを検知して自己終了する。
+// 通常運用では誰も stdin に書かないので、このゴルーチンは EOF までブロック。
+func monitorParentStdin() {
+	buf := make([]byte, 256)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			// EOF or pipe closed → 親死亡と判断して exit
+			fmt.Fprintf(os.Stderr, "[lifecycle] parent stdin closed (%v), exiting\n", err)
+			os.Exit(0)
+		}
+		// 何かデータが流れてきても無視 (現状 Tauri 側は stdin に書かない)
+		_ = n
+	}
+}
+
+// isStdinTerminal は stdin が tty (= 開発時に terminal から直起動) かを判定する。
+// tty の場合は monitorParentStdin を回さない (terminal を閉じる前に
+// アプリが落ちると困るし、そもそも親 = shell の死活監視は不要)。
+//
+// Tauri から sidecar として起動された場合は stdin がパイプなので tty で
+// なくなり、この関数は false を返す → monitorParentStdin が起動する。
+func isStdinTerminal() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
 }
