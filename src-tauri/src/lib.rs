@@ -87,17 +87,20 @@ pub fn run() {
         .expect("Tauriアプリの起動中にエラーが発生しました");
 
     // ウィンドウが全部閉じる / アプリ終了が要求された時に Go サイドカーを kill する。
-    // RunEvent::ExitRequested は最後のウィンドウが閉じられた直後に発火し、
-    // この時点なら state にアクセスして子プロセスをきれいに終了できる。
-    // 取り出しは take() で行うので 2 重 kill は起きない (idempotent)。
+    // 二段構えで保険を入れている:
+    //   1. RunEvent::ExitRequested: × ボタンや Cmd+Q で発火する通常経路。ここで
+    //      kill すれば、その後の Exit までに Go が止まっているのが理想。
+    //   2. RunEvent::Exit: イベントループが本当に終わる直前の最終フック。
+    //      何らかの理由 (プラグイン側で ExitRequested を prevent しているケース等)
+    //      で 1 が走らなかった場合の最後の砦。
+    // kill_sidecar は内部で take() するので、両方発火しても 2 重 kill にならない。
     //
-    // 注意: taskkill /F のような強制終了 (SIGKILL 相当) ではこのコールバックは
-    // 呼ばれないため、Go 側の `monitorParentStdin()` で stdin EOF を見て
+    // 注意: taskkill /F のような強制終了 (SIGKILL 相当) では Rust 側のフックは
+    // どれも呼ばれないため、Go 側の `monitorParentStdin()` で stdin EOF を見て
     // 自己終了する経路も併用する (backend/main.go 参照)。
-    app.run(|app_handle, event| {
-        if let RunEvent::ExitRequested { .. } = event {
-            kill_sidecar(app_handle);
-        }
+    app.run(|app_handle, event| match event {
+        RunEvent::ExitRequested { .. } | RunEvent::Exit => kill_sidecar(app_handle),
+        _ => {}
     });
 }
 

@@ -33,11 +33,18 @@ func main() {
 		go monitorParentStdin()
 	}
 
-	port, err := resolvePort()
+	// 先に listener を確保する。PORT 出力 → accept 開始 の順序を逆転させると、
+	// React が backend-ready イベントを受けて即 fetch した瞬間に Go の TCP
+	// accept がまだ立ち上がっておらず connection refused になることがある。
+	// listener を握ったまま PORT を出力 → http.Serve(listener, ...) に渡せば、
+	// PORT 通知時点で必ず accept-ready なので、フロントの初回 fetch が失敗する
+	// レースを根本から潰せる。
+	ln, err := resolveListener()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ポート取得エラー: %v\n", err)
 		os.Exit(1)
 	}
+	port := ln.Addr().(*net.TCPAddr).Port
 
 	// --db フラグがあればSQLite、なければインメモリ
 	userService, err := buildUserService(*dbPath)
@@ -53,8 +60,7 @@ func main() {
 	fmt.Printf("PORT:%d\n", port)
 	os.Stdout.Sync()
 
-	addr := fmt.Sprintf(":%d", port)
-	if err := http.ListenAndServe(addr, corsMiddleware(mux)); err != nil {
+	if err := http.Serve(ln, corsMiddleware(mux)); err != nil {
 		fmt.Fprintf(os.Stderr, "サーバー起動エラー: %v\n", err)
 		os.Exit(1)
 	}
@@ -71,24 +77,19 @@ func buildUserService(dbPath string) (*service.UserService, error) {
 	return service.NewUserService(sqlite.NewUserRepository(db)), nil
 }
 
-func resolvePort() (int, error) {
+// resolveListener は実際の listener をそのまま返す。
+// DEV_PORT が指定されていれば固定ポート、なければ OS 任せの空きポート (:0)。
+// listener を握ったまま http.Serve に渡すことで、PORT 通知 → 初回 fetch の
+// 間に accept が立ち上がっていないレースを排除する。
+func resolveListener() (net.Listener, error) {
+	addr := ":0"
 	if p := os.Getenv("DEV_PORT"); p != "" {
-		port, err := strconv.Atoi(p)
-		if err != nil {
-			return 0, fmt.Errorf("DEV_PORT の値が不正です: %s", p)
+		if _, err := strconv.Atoi(p); err != nil {
+			return nil, fmt.Errorf("DEV_PORT の値が不正です: %s", p)
 		}
-		return port, nil
+		addr = ":" + p
 	}
-	return findFreePort()
-}
-
-func findFreePort() (int, error) {
-	ln, err := net.Listen("tcp", ":0")
-	if err != nil {
-		return 0, err
-	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port, nil
+	return net.Listen("tcp", addr)
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
