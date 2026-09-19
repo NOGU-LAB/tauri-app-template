@@ -7,7 +7,7 @@ Tauri + Vite/React + Go のデスクトップアプリテンプレート。
 - Rust製ネイティブダイアログ、CSV/JSON選択、ドラッグ＆ドロップ
 - Goバックグラウンドジョブ、進捗ポーリング、キャンセル
 - Rust製保存ダイアログと、最小化・非表示時のOS通知
-- Goバックエンドの準備完了まで表示するスプラッシュウィンドウ
+- Goバックエンドの準備完了まで表示するスプラッシュウィンドウ（15秒の起動監視付き）
 
 動作確認には `samples/people.csv` と `samples/inventory.json` を利用できる。
 macOSではメインWebViewのバックグラウンド停止を無効化し、ウィンドウを隠した後も進捗確認と完了通知が継続する。
@@ -19,11 +19,11 @@ macOSではメインWebViewのバックグラウンド停止を無効化し、�
 3. React内のPDFプレビュー（この操作では印刷ジョブを投入しない）
 4. Rustが選択したOSプリンターへPDFを投入
 5. OS印刷キューの処理中・完了・失敗をReactへ反映
-6. OSキューに残っている間のベストエフォートなキャンセル
+6. macOS/Linuxでは、OSキューに残っている間のベストエフォートなキャンセル
 
-WindowsはPDFファイルに登録された `printto` ハンドラーを利用するため、PDFを扱えるアプリ（Microsoft EdgeやAdobe Acrobatなど）が必要。「Microsoft Print to PDF」ではWindowsの保存先ダイアログが表示される。保存完了後や物理プリンターがデータを受信した後は、アプリからキャンセルできない。macOS/LinuxはCUPSの `lp`、`lpstat`、`cancel` を利用する。
+WindowsはPDFファイルに登録された `printto` ハンドラーを利用するため、PDFを扱えるアプリ（Microsoft EdgeやAdobe Acrobatなど）が必要。「Microsoft Print to PDF」ではWindowsの保存先ダイアログが表示される。`printto` は投入したスプーラージョブIDを返さず、同じプリンターへ他アプリから投入されたジョブと安全に区別できないため、Windowsではアプリ内キャンセルを提供しない。macOS/LinuxはCUPSの `lp`、`lpstat`、`cancel` を利用し、取得したリクエストIDのジョブだけをキャンセルする。
 
-`QR Reader` タブではUSBシリアル（CDC）型のQR／バーコードリーダーを列挙し、Rustで受信した値をReactへリアルタイム表示できる。候補機器は製品名から自動選択され、ポートの再検出、接続・切断、ボーレート変更、直近100件の履歴表示に対応する。読み取った内容は自動実行せず文字列としてのみ扱う。
+`QR Reader` タブではUSBシリアル（CDC）型のQR／バーコードリーダーを列挙し、Rustで受信した値をReactへリアルタイム表示できる。候補機器は製品名から自動選択され、ポートの再検出、接続・切断、ボーレート変更、直近100件の履歴表示に対応する。切断時は読み取りスレッドがポートを解放するまで待つため、同じポートへすぐ再接続できる。読み取った内容は自動実行せず文字列としてのみ扱う。
 
 Go側だけで帳票を生成する場合:
 
@@ -322,7 +322,28 @@ npm run dev:hot
 ```
 
 `air` と Tauri dev を一括起動し、開発専用の固定ポートとトークンを両方へ渡す。
-本番ビルドでは外部バックエンド用の環境変数は無視され、必ず同梱サイドカーを使う。
+本番ビルドのTauri側は `TAURI_EXTERNAL_BACKEND_*` を無視し、必ず同梱サイドカーを使う。
+Windowsではスクリプトが `cmd.exe` 経由で `npm.cmd` を起動するため、PowerShellの実行ポリシーに依存しない。
+
+### ローカル検証
+
+GitHub Actionsを使わずに、主要な変更を次のコマンドで確認できる。
+
+```bash
+# Go（macOS/Linuxではrace detectorも利用可能）
+cd backend
+go test -race ./...
+cd ..
+
+# Rust
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+# React / TypeScript
+npm run build
+```
+
+WindowsでCGOを無効にしている場合は `go test ./...` を利用する。
 
 ---
 
@@ -347,7 +368,6 @@ npm run tauri build
 - `src-tauri/tauri.windows.conf.json` によって `beforeBuildCommand` が自動的に `pwsh` 経由に切り替わる
 - Goバイナリのビルドには PowerShell 7 (`pwsh`) が必要
 - 出力先: `src-tauri\target\release\bundle\`
-  - `msi\tauri-app_x.x.x_x64_en-US.msi`（MSIインストーラー）
   - `nsis\tauri-app_x.x.x_x64-setup.exe`（NSISセットアップ）
 
 #### Windowsの事前準備
