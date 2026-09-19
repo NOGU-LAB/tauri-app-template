@@ -12,6 +12,7 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
 mod printing;
+mod qr_reader;
 
 const MAX_IMPORT_SIZE: u64 = 5 << 20;
 
@@ -173,6 +174,7 @@ pub fn run() {
             dropped_files: Mutex::new(HashSet::new()),
         })
         .manage(printing::PrintState::default())
+        .manage(qr_reader::QrReaderState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
@@ -299,7 +301,11 @@ pub fn run() {
             printing::list_printers,
             printing::start_print_job,
             printing::get_print_job,
-            printing::cancel_print_job
+            printing::cancel_print_job,
+            qr_reader::list_qr_readers,
+            qr_reader::get_qr_reader_status,
+            qr_reader::start_qr_reader,
+            qr_reader::stop_qr_reader
         ])
         .build(tauri::generate_context!())
         .expect("Tauriアプリの起動中にエラーが発生しました");
@@ -337,6 +343,9 @@ fn show_main_window(app_handle: tauri::AppHandle) {
 }
 
 fn kill_sidecar(app_handle: &tauri::AppHandle) {
+    if let Some(state) = app_handle.try_state::<qr_reader::QrReaderState>() {
+        qr_reader::shutdown(&state);
+    }
     if let Some(state) = app_handle.try_state::<AppState>() {
         let child_opt = state
             .backend_child

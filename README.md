@@ -23,6 +23,8 @@ macOSではメインWebViewのバックグラウンド停止を無効化し、�
 
 WindowsはPDFファイルに登録された `printto` ハンドラーを利用するため、PDFを扱えるアプリ（Microsoft EdgeやAdobe Acrobatなど）が必要。「Microsoft Print to PDF」ではWindowsの保存先ダイアログが表示される。保存完了後や物理プリンターがデータを受信した後は、アプリからキャンセルできない。macOS/LinuxはCUPSの `lp`、`lpstat`、`cancel` を利用する。
 
+`QR Reader` タブではUSBシリアル（CDC）型のQR／バーコードリーダーを列挙し、Rustで受信した値をReactへリアルタイム表示できる。候補機器は製品名から自動選択され、ポートの再検出、接続・切断、ボーレート変更、直近100件の履歴表示に対応する。読み取った内容は自動実行せず文字列としてのみ扱う。
+
 Go側だけで帳票を生成する場合:
 
 ```bash
@@ -191,10 +193,12 @@ tauri-app/
 │   ├── hooks/useBackend.ts       # バックエンドポート受け取りフック
 │   ├── components/DesktopDemo.tsx # ファイル・ジョブのデモUI
 │   ├── components/PrinterDemo.tsx # PDFプレビュー・印刷ジョブUI
+│   ├── components/QrReaderDemo.tsx # USB QRリーダー・受信履歴UI
 │   └── App.tsx                   # 画面切り替え
 ├── src-tauri/                    # Tauri (Rust コア)
 │   ├── src/lib.rs                # Goサイドカー起動 + ポートをフロントへ送信
 │   ├── src/printing.rs           # OSプリンター列挙・印刷キュー操作
+│   ├── src/qr_reader.rs          # USBシリアル列挙・QR受信イベント
 │   ├── binaries/                 # ビルド済みGoバイナリ置き場
 │   ├── capabilities/default.json # Tauriパーミッション設定
 │   ├── tauri.conf.json           # Tauriアプリ設定（共通）

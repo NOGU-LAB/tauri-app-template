@@ -9,10 +9,18 @@ body { min-width: 320px; min-height: 100vh; background: #f7f9fc; }
 .min-w-0 { min-width: 0; }
 .print-status { padding: 14px; border: 1px solid #d8e0e8; border-radius: 10px; background: #f8fafc; }
 .pdf-preview { display: block; width: 100%; height: min(72vh, 760px); border: 0; background: #525659; }
+.scanner-live { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid #b7dfc3; border-radius: 10px; background: #f1fbf4; color: #166534; }
+.scanner-live-dot { width: 11px; height: 11px; flex: 0 0 auto; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 5px rgb(34 197 94 / 16%); }
+.scanner-empty { display: grid; place-items: center; align-content: center; gap: 12px; min-height: 235px; padding: 24px; border: 1px dashed #c5d0dc; border-radius: 12px; color: #718096; text-align: center; }
+.scanner-empty svg { font-size: 2.4rem; color: #a0aec0; }
+.scanner-history { max-height: 390px; }
+.scanner-value { display: inline-block; max-width: 360px; overflow-wrap: anywhere; white-space: normal; }
 @media (prefers-color-scheme: dark) {
   body { background: #111820; color: #edf2f7; }
   .drop-zone { color: #e2e8f0; background: #17212b; border-color: #465567; }
   .drop-zone:not(:disabled):hover, .drop-zone.is-dragging { background: #15283c; }
   .selected-file { background: #1b2733; }
   .print-status { background: #17212b; border-color: #465567; }
+  .scanner-live { color: #9ae6b4; background: #14271d; border-color: #2f6842; }
+  .scanner-empty { border-color: #465567; }
 }

@@ -4,10 +4,11 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faServer } from "@fortawesome/free-solid-svg-icons";
 import { DesktopDemo } from "./components/DesktopDemo";
 import { PrinterDemo } from "./components/PrinterDemo";
+import { QrReaderDemo } from "./components/QrReaderDemo";
 import { UsersDemo } from "./components/UsersDemo";
 import { useBackend } from "./hooks/useBackend";
 
-type View = "desktop" | "printer" | "users";
+type View = "desktop" | "printer" | "qr-reader" | "users";
 
 function App() {
   const { apiBase, token, isReady, backendError } = useBackend();
@@ -40,11 +41,13 @@ function App() {
         <Nav variant="pills" activeKey={view} onSelect={(key) => key && setView(key as View)}>
           <Nav.Item><Nav.Link eventKey="desktop">Desktop Showcase</Nav.Link></Nav.Item>
           <Nav.Item><Nav.Link eventKey="printer">Printer</Nav.Link></Nav.Item>
+          <Nav.Item><Nav.Link eventKey="qr-reader">QR Reader</Nav.Link></Nav.Item>
           <Nav.Item><Nav.Link eventKey="users">Users CRUD</Nav.Link></Nav.Item>
         </Nav>
       </header>
       {view === "desktop" && <DesktopDemo apiBase={apiBase} token={token} />}
       {view === "printer" && <PrinterDemo apiBase={apiBase} token={token} />}
+      {view === "qr-reader" && <QrReaderDemo />}
       {view === "users" && <UsersDemo apiBase={apiBase} token={token} />}
     </Container>
   );

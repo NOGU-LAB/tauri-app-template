@@ -25,6 +25,7 @@ tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["sync"] }
 base64 = "0.22"
+serialport = { version = "4.10.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Printing", "Win32_UI_Shell"] }
