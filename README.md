@@ -2,6 +2,16 @@
 
 Tauri + Vite/React + Go のデスクトップアプリテンプレート。
 
+起動後の `Desktop Showcase` では、デスクトップアプリ固有の処理を一連の流れで試せる。
+
+- Rust製ネイティブダイアログ、CSV/JSON選択、ドラッグ＆ドロップ
+- Goバックグラウンドジョブ、進捗ポーリング、キャンセル
+- Rust製保存ダイアログと、最小化・非表示時のOS通知
+- Goバックエンドの準備完了まで表示するスプラッシュウィンドウ
+
+動作確認には `samples/people.csv` と `samples/inventory.json` を利用できる。
+macOSではメインWebViewのバックグラウンド停止を無効化し、ウィンドウを隠した後も進捗確認と完了通知が継続する。
+
 ## 技術スタック
 
 | レイヤー | 技術 |
@@ -21,7 +31,7 @@ Tauri + Vite/React + Go のデスクトップアプリテンプレート。
 graph TB
     subgraph Desktop App
         subgraph Tauri["Tauri v2 (Rust コア)"]
-            TauriCore["lib.rs\nサイドカー起動\nイベント中継"]
+            TauriCore["lib.rs\nサイドカー起動\nファイル/通知/スプラッシュ"]
         end
 
         subgraph Frontend["フロントエンド (Vite + React)"]
@@ -32,6 +42,7 @@ graph TB
         subgraph GoBackend["Go バックエンド (サイドカー)"]
             Handler["Handler層\nHTTP入出力"]
             Service["Service層\nビジネスロジック"]
+            Job["JobService\n進捗/キャンセル"]
             Repository["Repository層\nデータアクセスI/F"]
             MemRepo["memory.Repository\n(テスト・開発用)"]
             DBRepo["sqlite.Repository\n(デスクトップ既定)"]
@@ -43,6 +54,7 @@ graph TB
     Hook --> UI
     UI -->|"認証付きHTTP fetch\n127.0.0.1:PORT"| Handler
     Handler --> Service
+    Handler --> Job
     Service --> Repository
     Repository -.-> MemRepo
     Repository --> DBRepo
@@ -159,7 +171,8 @@ flowchart LR
 tauri-app/
 ├── src/                          # Vite + React フロントエンド
 │   ├── hooks/useBackend.ts       # バックエンドポート受け取りフック
-│   └── App.tsx                   # メインUI
+│   ├── components/DesktopDemo.tsx # ファイル・ジョブのデモUI
+│   └── App.tsx                   # 画面切り替え
 ├── src-tauri/                    # Tauri (Rust コア)
 │   ├── src/lib.rs                # Goサイドカー起動 + ポートをフロントへ送信
 │   ├── binaries/                 # ビルド済みGoバイナリ置き場
@@ -177,6 +190,8 @@ tauri-app/
 │   ├── infra/db.go               # SQLite接続・マイグレーション
 │   ├── model/                    # データ構造体
 │   └── .air.toml                 # air（ホットリロード）設定
+├── public/                       # スプラッシュ画面
+├── samples/                      # CSV/JSON動作確認データ
 ├── build-backend.sh              # Goビルドスクリプト（macOS/Linux）
 └── build-backend.ps1             # Goビルドスクリプト（Windows PowerShell）
 ```
