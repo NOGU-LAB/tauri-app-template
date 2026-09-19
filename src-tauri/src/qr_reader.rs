@@ -280,6 +280,7 @@ fn set_status(state: &QrReaderState, status: QrReaderStatus) -> Result<(), Strin
 #[derive(Default)]
 struct ScanDecoder {
     buffer: Vec<u8>,
+    discarding_oversized_scan: bool,
 }
 
 impl ScanDecoder {
@@ -287,10 +288,17 @@ impl ScanDecoder {
         let mut scans = Vec::new();
         for byte in bytes {
             if *byte == b'\r' || *byte == b'\n' {
-                if !self.buffer.is_empty() {
-                    let value = String::from_utf8_lossy(&self.buffer).trim().to_string();
+                if self.discarding_oversized_scan {
+                    self.discarding_oversized_scan = false;
                     self.buffer.clear();
-                    if !value.is_empty() {
+                    continue;
+                }
+                if !self.buffer.is_empty() {
+                    let value = std::str::from_utf8(&self.buffer)
+                        .ok()
+                        .map(|value| value.trim().to_string());
+                    self.buffer.clear();
+                    if let Some(value) = value.filter(|value| !value.is_empty()) {
                         scans.push(value);
                     }
                 }
@@ -298,6 +306,7 @@ impl ScanDecoder {
                 self.buffer.push(*byte);
             } else {
                 self.buffer.clear();
+                self.discarding_oversized_scan = true;
             }
         }
         scans
@@ -322,5 +331,19 @@ mod tests {
     fn ignores_empty_lines_and_trims_whitespace() {
         let mut decoder = ScanDecoder::default();
         assert_eq!(decoder.push(b"\r\n  value  \n"), ["value"]);
+    }
+
+    #[test]
+    fn rejects_invalid_utf8_without_affecting_the_next_scan() {
+        let mut decoder = ScanDecoder::default();
+        assert_eq!(decoder.push(&[0xff, b'\r', b'O', b'K', b'\r']), ["OK"]);
+    }
+
+    #[test]
+    fn discards_the_whole_oversized_scan() {
+        let mut decoder = ScanDecoder::default();
+        let oversized = vec![b'A'; super::MAX_SCAN_BYTES + 20];
+        assert!(decoder.push(&oversized).is_empty());
+        assert_eq!(decoder.push(b"tail\rOK\r"), ["OK"]);
     }
 }
