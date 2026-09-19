@@ -10,8 +10,8 @@ type QrReaderInfo = {
   product?: string;
   manufacturer?: string;
   serialNumber?: string;
-  vendorId?: number;
-  productId?: number;
+  vendorId?: number | null;
+  productId?: number | null;
   isLikelyScanner: boolean;
 };
 
@@ -101,7 +101,7 @@ export function QrReaderDemo() {
   const busy = status.state === "connecting" || status.state === "connected";
   const badgeVariant = status.state === "connected" ? "success" : status.state === "error" ? "danger" : status.state === "connecting" ? "warning" : "secondary";
   const deviceId = useMemo(() => {
-    if (selected?.vendorId === undefined || selected.productId === undefined) return "";
+    if (selected?.vendorId == null || selected.productId == null) return "";
     return `VID ${selected.vendorId.toString(16).padStart(4, "0").toUpperCase()} / PID ${selected.productId.toString(16).padStart(4, "0").toUpperCase()}`;
   }, [selected]);
 
