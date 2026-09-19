@@ -45,6 +45,7 @@ struct QrScanEvent {
 struct ReaderSession {
     id: u64,
     cancel: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 pub struct QrReaderState {
@@ -136,14 +137,6 @@ pub fn start_qr_reader(
 
     stop_active_session(&state)?;
     let id = state.next_session_id.fetch_add(1, Ordering::SeqCst) + 1;
-    let cancel = Arc::new(AtomicBool::new(false));
-    *state
-        .session
-        .lock()
-        .map_err(|_| "QRリーダー状態を更新できません".to_string())? = Some(ReaderSession {
-        id,
-        cancel: cancel.clone(),
-    });
     let connecting = QrReaderStatus {
         state: "connecting".into(),
         port_name: Some(port_name.clone()),
@@ -151,9 +144,28 @@ pub fn start_qr_reader(
         error: None,
     };
     set_status(&state, connecting.clone())?;
-    let _ = app.emit("qr-reader-status", connecting.clone());
 
-    thread::spawn(move || run_reader(app, id, cancel, port_name, baud_rate));
+    let cancel = Arc::new(AtomicBool::new(false));
+    let thread_cancel = cancel.clone();
+    let reader_app = app.clone();
+    let (start_tx, start_rx) = std::sync::mpsc::sync_channel(0);
+    let reader_thread = thread::spawn(move || {
+        if start_rx.recv().is_ok() {
+            run_reader(reader_app, id, thread_cancel, port_name, baud_rate);
+        }
+    });
+    *state
+        .session
+        .lock()
+        .map_err(|_| "QRリーダー状態を更新できません".to_string())? = Some(ReaderSession {
+        id,
+        cancel,
+        thread: Some(reader_thread),
+    });
+    let _ = app.emit("qr-reader-status", connecting.clone());
+    start_tx
+        .send(())
+        .map_err(|_| "QRリーダースレッドを開始できません".to_string())?;
     Ok(connecting)
 }
 
@@ -173,11 +185,7 @@ pub fn stop_qr_reader(
 }
 
 pub fn shutdown(state: &QrReaderState) {
-    if let Ok(mut session) = state.session.lock() {
-        if let Some(session) = session.take() {
-            session.cancel.store(true, Ordering::SeqCst);
-        }
-    }
+    let _ = stop_active_session(state);
 }
 
 fn run_reader(app: AppHandle, id: u64, cancel: Arc<AtomicBool>, port_name: String, baud_rate: u32) {
@@ -258,13 +266,18 @@ fn update_if_active(app: &AppHandle, id: u64, status: QrReaderStatus) {
 }
 
 fn stop_active_session(state: &QrReaderState) -> Result<(), String> {
-    if let Some(session) = state
+    if let Some(mut session) = state
         .session
         .lock()
         .map_err(|_| "QRリーダー状態を更新できません".to_string())?
         .take()
     {
         session.cancel.store(true, Ordering::SeqCst);
+        if let Some(reader_thread) = session.thread.take() {
+            reader_thread
+                .join()
+                .map_err(|_| "QRリーダースレッドの終了に失敗しました".to_string())?;
+        }
     }
     Ok(())
 }

@@ -90,12 +90,17 @@ export function PrinterDemo({ apiBase, token }: Props) {
   useEffect(() => {
     if (!job || (job.status !== "queued" && job.status !== "printing")) return;
     let disposed = false;
+    let polling = false;
     const timer = window.setInterval(async () => {
+      if (polling) return;
+      polling = true;
       try {
         const latest = await invoke<PrintJob>("get_print_job", { id: job.id });
         if (!disposed) setJob(latest);
       } catch (cause) {
         if (!disposed) setError(errorMessage(cause, "印刷状態を取得できませんでした"));
+      } finally {
+        polling = false;
       }
     }, 500);
     return () => {
@@ -212,7 +217,7 @@ export function PrinterDemo({ apiBase, token }: Props) {
       </Card>
 
       <Alert variant="info" className="small">
-        <strong>キャンセル範囲:</strong> OSキューに残っている間は取り消しを試みます。プリンタードライバーが受信済み、物理印刷開始後、または「Microsoft Print to PDF」で保存完了後は取り消せません。プレビューのみでは印刷ジョブを投入しません。
+        <strong>キャンセル範囲:</strong> macOSではCUPSキューに残っている間だけ取り消しを試みます。Windowsのprintto経由では他アプリのジョブと安全に区別できないため、アプリ内キャンセルは表示しません。物理印刷開始後は取り消せません。プレビューのみでは印刷ジョブを投入しません。
       </Alert>
 
       <Modal show={previewOpen} onHide={() => setPreviewOpen(false)} size="xl" centered>

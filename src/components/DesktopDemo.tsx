@@ -67,7 +67,10 @@ export function DesktopDemo({ apiBase, token }: Props) {
   useEffect(() => {
     if (!job || !activeStatuses.has(job.status)) return;
     let disposed = false;
+    let polling = false;
     const timer = window.setInterval(async () => {
+      if (polling) return;
+      polling = true;
       try {
         const latest = await requestJSON<Job>(apiBase, token, `/api/jobs/${job.id}`);
         if (disposed) return;
@@ -81,6 +84,8 @@ export function DesktopDemo({ apiBase, token }: Props) {
         }
       } catch (cause) {
         if (!disposed) setError(errorMessage(cause, "進捗の取得に失敗しました"));
+      } finally {
+        polling = false;
       }
     }, 200);
     return () => {

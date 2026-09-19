@@ -230,6 +230,7 @@ pub fn run() {
                     *backend_child = Some(child);
                 }
             }
+            schedule_backend_startup_watchdog(app_handle.clone());
 
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = rx.recv().await {
@@ -325,6 +326,26 @@ pub fn run() {
     app.run(|app_handle, event| match event {
         RunEvent::ExitRequested { .. } | RunEvent::Exit => kill_sidecar(app_handle),
         _ => {}
+    });
+}
+
+fn schedule_backend_startup_watchdog(app_handle: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(15));
+        let ready = app_handle
+            .try_state::<AppState>()
+            .and_then(|state| state.backend_info.lock().ok().map(|info| info.is_some()))
+            .unwrap_or(false);
+        let main_is_visible = app_handle
+            .get_webview_window("main")
+            .and_then(|window| window.is_visible().ok())
+            .unwrap_or(false);
+        if !ready && !main_is_visible {
+            let message = "バックエンドの起動が15秒以内に完了しませんでした";
+            eprintln!("[backend error] {message}");
+            let _ = app_handle.emit("backend-error", message);
+            show_main_window(app_handle);
+        }
     });
 }
 

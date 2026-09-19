@@ -21,10 +21,11 @@ const maxJobContentSize = 5 << 20
 const jobRetention = 10 * time.Minute
 
 var (
-	ErrInvalidJobFile = errors.New("CSVまたはJSONファイルを選択してください")
-	ErrJobTooLarge    = errors.New("ファイルサイズは5MB以下にしてください")
-	ErrJobNotFound    = errors.New("job not found")
-	ErrJobNotRunning  = errors.New("job is not running")
+	ErrInvalidJobFile    = errors.New("CSVまたはJSONファイルを選択してください")
+	ErrInvalidJobContent = errors.New("CSVまたはJSONの内容が不正です")
+	ErrJobTooLarge       = errors.New("ファイルサイズは5MB以下にしてください")
+	ErrJobNotFound       = errors.New("job not found")
+	ErrJobNotRunning     = errors.New("job is not running")
 )
 
 type jobEntry struct {
@@ -102,7 +103,9 @@ func (s *JobService) Cancel(id string) (model.Job, error) {
 }
 
 func (s *JobService) run(ctx context.Context, id string) {
-	s.update(id, func(job *model.Job) { job.Status = model.JobRunning })
+	if !s.markRunning(id) {
+		return
+	}
 
 	for {
 		entry, err := s.Get(id)
@@ -134,6 +137,17 @@ func (s *JobService) run(ctx context.Context, id string) {
 	time.AfterFunc(jobRetention, func() { s.deleteTerminal(id) })
 }
 
+func (s *JobService) markRunning(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.jobs[id]
+	if !ok || entry.job.Status != model.JobQueued {
+		return false
+	}
+	entry.job.Status = model.JobRunning
+	return true
+}
+
 func (s *JobService) deleteTerminal(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -161,10 +175,10 @@ func prepareJobResult(fileName, content string) (string, int, error) {
 	case ".csv":
 		rows, err := csv.NewReader(strings.NewReader(content)).ReadAll()
 		if err != nil {
-			return "", 0, fmt.Errorf("CSVを解析できません: %w", err)
+			return "", 0, fmt.Errorf("%w: CSVを解析できません: %v", ErrInvalidJobContent, err)
 		}
 		if len(rows) == 0 {
-			return "", 0, errors.New("CSVにデータがありません")
+			return "", 0, fmt.Errorf("%w: CSVにデータがありません", ErrInvalidJobContent)
 		}
 		report["format"] = "csv"
 		report["itemCount"] = len(rows)
@@ -176,10 +190,10 @@ func prepareJobResult(fileName, content string) (string, int, error) {
 		decoder := json.NewDecoder(strings.NewReader(content))
 		decoder.UseNumber()
 		if err := decoder.Decode(&data); err != nil {
-			return "", 0, fmt.Errorf("JSONを解析できません: %w", err)
+			return "", 0, fmt.Errorf("%w: JSONを解析できません: %v", ErrInvalidJobContent, err)
 		}
 		if err := decoder.Decode(&struct{}{}); err != io.EOF {
-			return "", 0, errors.New("JSONには1つの値だけを含めてください")
+			return "", 0, fmt.Errorf("%w: JSONには1つの値だけを含めてください", ErrInvalidJobContent)
 		}
 		count := 1
 		if values, ok := data.([]any); ok {

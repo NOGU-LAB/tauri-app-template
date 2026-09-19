@@ -3,7 +3,9 @@ import process from "node:process";
 
 const port = "8765";
 const token = "tauri-local-development-token";
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmCommand = process.platform === "win32"
+  ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "npm.cmd", "run", "tauri", "dev"] }
+  : { command: "npm", args: ["run", "tauri", "dev"] };
 const children = new Set();
 let stopping = false;
 
@@ -44,7 +46,7 @@ start("air", ["-c", ".air.toml"], {
   cwd: new URL("../backend/", import.meta.url),
   env: sharedEnv,
 });
-start(npm, ["run", "tauri", "dev"], {
+start(npmCommand.command, npmCommand.args, {
   env: {
     ...process.env,
     TAURI_EXTERNAL_BACKEND_PORT: port,

@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use std::process::Command;
 
 const MAX_PDF_SIZE: usize = 10 << 20;
+const PRINT_JOB_RETENTION: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,7 +87,7 @@ pub fn start_print_job(
         document_name: safe_document_name,
         status: "queued".into(),
         message: "OSへ印刷ジョブを投入しています".into(),
-        cancelable: true,
+        cancelable: platform_supports_cancellation(),
     };
     state
         .jobs
@@ -145,7 +146,7 @@ fn run_print_job(app: AppHandle, id: String, printer_name: String, path: PathBuf
         &id,
         "printing",
         "OSの印刷システムへ引き渡しました。PDFプリンターでは保存先を選んでください。",
-        true,
+        platform_supports_cancellation(),
     );
     let result = platform_print_and_wait(&app, &id, &printer_name, &path);
     if !is_cancelled(&app, &id) {
@@ -161,6 +162,27 @@ fn run_print_job(app: AppHandle, id: String, printer_name: String, path: PathBuf
         }
     }
     let _ = fs::remove_file(path);
+    thread::sleep(PRINT_JOB_RETENTION);
+    if let Some(state) = app.try_state::<PrintState>() {
+        if let Ok(mut jobs) = state.jobs.lock() {
+            jobs.remove(&id);
+        }
+        if let Ok(mut cancelled) = state.cancel_requested.lock() {
+            cancelled.remove(&id);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn platform_supports_cancellation() -> bool {
+    // ShellExecuteW("printto") does not return a spooler job ID. Cancelling
+    // queue-diff IDs could delete jobs submitted concurrently by other apps.
+    false
+}
+
+#[cfg(not(target_os = "windows"))]
+fn platform_supports_cancellation() -> bool {
+    true
 }
 
 fn update_job(app: &AppHandle, id: &str, status: &str, message: &str, cancelable: bool) {
@@ -289,8 +311,8 @@ fn platform_list_printers() -> Result<Vec<PrinterInfo>, String> {
 
 #[cfg(target_os = "windows")]
 fn platform_print_and_wait(
-    app: &AppHandle,
-    id: &str,
+    _app: &AppHandle,
+    _id: &str,
     printer_name: &str,
     path: &Path,
 ) -> Result<(), String> {
@@ -298,12 +320,6 @@ fn platform_print_and_wait(
     windows_shell_print_to(path, printer_name)?;
     let mut observed = HashSet::new();
     for _ in 0..240 {
-        if is_cancelled(app, id) {
-            for job_id in &observed {
-                let _ = windows_remove_job(printer_name, *job_id);
-            }
-            return Ok(());
-        }
         thread::sleep(Duration::from_millis(500));
         let current = windows_queue_ids(printer_name)?;
         observed.extend(current.difference(&before));
@@ -361,22 +377,6 @@ fn windows_queue_ids(printer_name: &str) -> Result<HashSet<u32>, String> {
         std::slice::from_raw_parts(buffer.as_ptr().cast::<JOB_INFO_1W>(), returned as usize)
     };
     Ok(entries.iter().map(|entry| entry.JobId).collect())
-}
-
-#[cfg(target_os = "windows")]
-fn windows_remove_job(printer_name: &str, job_id: u32) -> Result<(), String> {
-    use std::ptr;
-    use windows_sys::Win32::Graphics::Printing::{SetJobW, JOB_CONTROL_CANCEL};
-
-    let handle = WindowsPrinterHandle::open(printer_name)?;
-    let success = unsafe { SetJobW(handle.0, job_id, 0, ptr::null(), JOB_CONTROL_CANCEL) };
-    if success == 0 {
-        return Err(format!(
-            "Windows印刷ジョブをキャンセルできません: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -472,11 +472,7 @@ fn platform_list_printers() -> Result<Vec<PrinterInfo>, String> {
         .output()
         .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
         .unwrap_or_default();
-    let user_options = Command::new("lpoptions")
-        .output()
-        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-        .unwrap_or_default();
-    let default_text = format!("{default_output}\n{user_options}");
+    let default_name = parse_cups_default_printer(&default_output);
 
     Ok(String::from_utf8_lossy(&destinations.stdout)
         .lines()
@@ -492,7 +488,7 @@ fn platform_list_printers() -> Result<Vec<PrinterInfo>, String> {
                 .unwrap_or_default();
             Some(PrinterInfo {
                 name: name.into(),
-                is_default: default_text.contains(name),
+                is_default: default_name.as_deref() == Some(name),
                 is_offline: status.contains(" disabled ") || status.contains("無効"),
             })
         })
@@ -536,11 +532,26 @@ fn platform_print_and_wait(
             .env("LC_ALL", "C")
             .output()
             .map_err(|error| format!("印刷状態を取得できません: {error}"))?;
+        if !status.status.success() {
+            return Err(format!(
+                "印刷状態を取得できません: {}",
+                String::from_utf8_lossy(&status.stderr).trim()
+            ));
+        }
         if !String::from_utf8_lossy(&status.stdout).contains(&request_id) {
             return Ok(());
         }
     }
     Err("印刷キューが120秒以内に完了しませんでした".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn parse_cups_default_printer(response: &str) -> Option<String> {
+    response
+        .lines()
+        .find_map(|line| line.rsplit_once(':').map(|(_, name)| name.trim()))
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -556,7 +567,27 @@ fn parse_cups_request_id(response: &str, printer_name: &str) -> Option<String> {
 
 #[cfg(all(test, not(target_os = "windows")))]
 mod tests {
-    use super::parse_cups_request_id;
+    use super::{parse_cups_default_printer, parse_cups_request_id};
+
+    #[test]
+    fn parses_default_printer_without_substring_matches() {
+        assert_eq!(
+            parse_cups_default_printer("system default destination: HP_LaserJet\n"),
+            Some("HP_LaserJet".into())
+        );
+        assert_ne!(
+            parse_cups_default_printer("system default destination: HP_LaserJet\n").as_deref(),
+            Some("HP")
+        );
+    }
+
+    #[test]
+    fn parses_japanese_default_printer() {
+        assert_eq!(
+            parse_cups_default_printer("システムのデフォルトの送信先: Brother_MFC_J6770CDW\n"),
+            Some("Brother_MFC_J6770CDW".into())
+        );
+    }
 
     #[test]
     fn parses_english_cups_request_id() {

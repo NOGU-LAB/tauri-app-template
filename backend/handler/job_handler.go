@@ -86,7 +86,7 @@ func (h *JobHandler) start(w http.ResponseWriter, r *http.Request) {
 	}
 	job, err := h.service.Start(req.FileName, req.Content)
 	if err != nil {
-		if errors.Is(err, service.ErrInvalidJobFile) || errors.Is(err, service.ErrJobTooLarge) || strings.Contains(err.Error(), "解析") || strings.Contains(err.Error(), "JSON") || strings.Contains(err.Error(), "データがありません") {
+		if errors.Is(err, service.ErrInvalidJobFile) || errors.Is(err, service.ErrInvalidJobContent) || errors.Is(err, service.ErrJobTooLarge) {
 			writeJSONError(w, http.StatusUnprocessableEntity, err.Error())
 		} else {
 			writeJSONError(w, http.StatusInternalServerError, "internal server error")
