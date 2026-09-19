@@ -195,8 +195,8 @@ export function DesktopDemo({ apiBase, token }: Props) {
           <Card.Text className="small text-muted mb-0">処理中にウィンドウを最小化または非表示にすると、完了時にRustからOS通知を送ります。</Card.Text>
         </Card.Body></Card></div>
         <div className="col-md-6"><Card className="h-100 border-0 bg-body-tertiary"><Card.Body>
-          <Card.Title className="h6">次のデバイス連携</Card.Title>
-          <Card.Text className="small text-muted mb-0">HIDの列挙・接続とプリンター一覧・PDF印刷は、Node依存を持たせずRustサービスとして追加できます。</Card.Text>
+          <Card.Title className="h6">プリンター連携</Card.Title>
+          <Card.Text className="small text-muted mb-0">PrinterタブでGoのPDF生成、Rustのプリンター列挙・印刷キュー操作、印刷しないプレビューを試せます。</Card.Text>
         </Card.Body></Card></div>
       </div>
     </div>

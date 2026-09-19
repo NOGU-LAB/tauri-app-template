@@ -7,9 +7,12 @@ body { min-width: 320px; min-height: 100vh; background: #f7f9fc; }
 .drop-zone-icon { display: grid; place-items: center; width: 42px; height: 42px; margin-bottom: 4px; border-radius: 50%; color: #0d6efd; background: #e4f0ff; font-size: 1.45rem; }
 .selected-file { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 14px; border-radius: 10px; background: #f1f5f9; }
 .min-w-0 { min-width: 0; }
+.print-status { padding: 14px; border: 1px solid #d8e0e8; border-radius: 10px; background: #f8fafc; }
+.pdf-preview { display: block; width: 100%; height: min(72vh, 760px); border: 0; background: #525659; }
 @media (prefers-color-scheme: dark) {
   body { background: #111820; color: #edf2f7; }
   .drop-zone { color: #e2e8f0; background: #17212b; border-color: #465567; }
   .drop-zone:not(:disabled):hover, .drop-zone.is-dragging { background: #15283c; }
   .selected-file { background: #1b2733; }
+  .print-status { background: #17212b; border-color: #465567; }
 }

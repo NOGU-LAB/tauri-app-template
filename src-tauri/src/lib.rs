@@ -11,6 +11,8 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+mod printing;
+
 const MAX_IMPORT_SIZE: u64 = 5 << 20;
 
 // 接続情報をアプリ状態として保持（Reactがイベントを見逃した場合のフォールバック用）。
@@ -170,6 +172,7 @@ pub fn run() {
             backend_child: Mutex::new(None),
             dropped_files: Mutex::new(HashSet::new()),
         })
+        .manage(printing::PrintState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
@@ -292,7 +295,11 @@ pub fn run() {
             pick_import_file,
             read_dropped_file,
             save_export_file,
-            notify_if_hidden
+            notify_if_hidden,
+            printing::list_printers,
+            printing::start_print_job,
+            printing::get_print_job,
+            printing::cancel_print_job
         ])
         .build(tauri::generate_context!())
         .expect("Tauriアプリの起動中にエラーが発生しました");

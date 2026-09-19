@@ -3616,6 +3616,7 @@ dependencies = [
 name = "tauri-app"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "tauri",
  "tauri-build",
@@ -3623,6 +3624,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-shell",
  "tokio",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -16,6 +16,7 @@ func newServer(userHandler *handler.UserHandler) *http.ServeMux {
 	jobHandler := handler.NewJobHandler(service.NewJobService(150 * time.Millisecond))
 	mux.Handle("/api/jobs", jobHandler)
 	mux.Handle("/api/jobs/", jobHandler)
+	mux.Handle("/api/reports/sample", handler.NewReportHandler())
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)

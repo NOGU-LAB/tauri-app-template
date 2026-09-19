@@ -12,6 +12,24 @@ Tauri + Vite/React + Go のデスクトップアプリテンプレート。
 動作確認には `samples/people.csv` と `samples/inventory.json` を利用できる。
 macOSではメインWebViewのバックグラウンド停止を無効化し、ウィンドウを隠した後も進捗確認と完了通知が継続する。
 
+`Printer` タブでは次の流れを確認できる。
+
+1. RustがOSのプリンターを列挙し、既定・オフライン状態を表示
+2. Goサイドカーが依存ライブラリなしでA4のサンプルPDF帳票を生成
+3. React内のPDFプレビュー（この操作では印刷ジョブを投入しない）
+4. Rustが選択したOSプリンターへPDFを投入
+5. OS印刷キューの処理中・完了・失敗をReactへ反映
+6. OSキューに残っている間のベストエフォートなキャンセル
+
+WindowsはPDFファイルに登録された `printto` ハンドラーを利用するため、PDFを扱えるアプリ（Microsoft EdgeやAdobe Acrobatなど）が必要。「Microsoft Print to PDF」ではWindowsの保存先ダイアログが表示される。保存完了後や物理プリンターがデータを受信した後は、アプリからキャンセルできない。macOS/LinuxはCUPSの `lp`、`lpstat`、`cancel` を利用する。
+
+Go側だけで帳票を生成する場合:
+
+```bash
+cd backend
+go run ./cmd/sample-report ../sample-report.pdf
+```
+
 ## 技術スタック
 
 | レイヤー | 技術 |
@@ -172,9 +190,11 @@ tauri-app/
 ├── src/                          # Vite + React フロントエンド
 │   ├── hooks/useBackend.ts       # バックエンドポート受け取りフック
 │   ├── components/DesktopDemo.tsx # ファイル・ジョブのデモUI
+│   ├── components/PrinterDemo.tsx # PDFプレビュー・印刷ジョブUI
 │   └── App.tsx                   # 画面切り替え
 ├── src-tauri/                    # Tauri (Rust コア)
 │   ├── src/lib.rs                # Goサイドカー起動 + ポートをフロントへ送信
+│   ├── src/printing.rs           # OSプリンター列挙・印刷キュー操作
 │   ├── binaries/                 # ビルド済みGoバイナリ置き場
 │   ├── capabilities/default.json # Tauriパーミッション設定
 │   ├── tauri.conf.json           # Tauriアプリ設定（共通）
