@@ -4,12 +4,14 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
     sync::Mutex,
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager, State};
+
+#[cfg(not(target_os = "windows"))]
+use std::process::Command;
 
 const MAX_PDF_SIZE: usize = 10 << 20;
 
@@ -207,30 +209,82 @@ fn temporary_pdf_path(id: &str) -> PathBuf {
 
 #[cfg(target_os = "windows")]
 fn platform_list_printers() -> Result<Vec<PrinterInfo>, String> {
-    // Win32_Printer (CIM/WMI) can fail after a local Windows account is renamed
-    // because the provider attempts an obsolete account/SID lookup. Get-Printer
-    // does not have that dependency. The per-user default is stored separately.
-    let script = "$OutputEncoding=[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); $device=(Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows' -Name Device -ErrorAction SilentlyContinue).Device; $default=($device -split ',')[0]; Get-Printer | Sort-Object Name | ForEach-Object { '{0}`t{1}`t{2}' -f $_.Name,($_.Name -eq $default),($_.PrinterStatus -eq 'Offline') }";
-    let output = powershell(script, &[])?;
-    Ok(output
-        .lines()
-        .filter_map(|line| {
-            let mut values = line.split('\t');
-            let name = values.next()?.trim();
+    use std::ptr;
+    use windows_sys::Win32::Graphics::Printing::{
+        EnumPrintersW, GetDefaultPrinterW, PRINTER_ATTRIBUTE_WORK_OFFLINE,
+        PRINTER_ENUM_CONNECTIONS, PRINTER_ENUM_LOCAL, PRINTER_INFO_4W,
+    };
+
+    let default_name = unsafe {
+        let mut length = 0;
+        GetDefaultPrinterW(ptr::null_mut(), &mut length);
+        if length == 0 {
+            String::new()
+        } else {
+            let mut buffer = vec![0u16; length as usize];
+            if GetDefaultPrinterW(buffer.as_mut_ptr(), &mut length) == 0 {
+                String::new()
+            } else {
+                String::from_utf16_lossy(&buffer[..length.saturating_sub(1) as usize])
+            }
+        }
+    };
+
+    let mut needed = 0;
+    let mut returned = 0;
+    let flags = PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS;
+    unsafe {
+        EnumPrintersW(
+            flags,
+            ptr::null(),
+            4,
+            ptr::null_mut(),
+            0,
+            &mut needed,
+            &mut returned,
+        );
+    }
+    if needed == 0 {
+        return Ok(Vec::new());
+    }
+    let word_size = std::mem::size_of::<usize>();
+    let mut buffer = vec![0usize; (needed as usize).div_ceil(word_size)];
+    let success = unsafe {
+        EnumPrintersW(
+            flags,
+            ptr::null(),
+            4,
+            buffer.as_mut_ptr().cast(),
+            needed,
+            &mut needed,
+            &mut returned,
+        )
+    };
+    if success == 0 {
+        return Err(format!(
+            "Windows印刷APIがプリンター一覧を返しませんでした: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let entries = unsafe {
+        std::slice::from_raw_parts(buffer.as_ptr().cast::<PRINTER_INFO_4W>(), returned as usize)
+    };
+    let mut printers = entries
+        .iter()
+        .filter_map(|entry| {
+            let name = unsafe { wide_ptr_string(entry.pPrinterName) };
             if name.is_empty() {
                 return None;
             }
             Some(PrinterInfo {
-                name: name.to_string(),
-                is_default: values
-                    .next()
-                    .is_some_and(|value| value.eq_ignore_ascii_case("true")),
-                is_offline: values
-                    .next()
-                    .is_some_and(|value| value.eq_ignore_ascii_case("true")),
+                is_default: name.eq_ignore_ascii_case(&default_name),
+                is_offline: entry.Attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE != 0,
+                name,
             })
         })
-        .collect())
+        .collect::<Vec<_>>();
+    printers.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    Ok(printers)
 }
 
 #[cfg(target_os = "windows")]
@@ -262,48 +316,112 @@ fn platform_print_and_wait(
 
 #[cfg(target_os = "windows")]
 fn windows_queue_ids(printer_name: &str) -> Result<HashSet<u32>, String> {
-    let script = "$ErrorActionPreference='Stop'; Get-PrintJob -PrinterName $env:TAURI_PRINTER_NAME -ErrorAction SilentlyContinue | ForEach-Object { $_.ID }";
-    let output = powershell(script, &[("TAURI_PRINTER_NAME", printer_name)])?;
-    Ok(output
-        .lines()
-        .filter_map(|line| line.trim().parse::<u32>().ok())
-        .collect())
+    use std::ptr;
+    use windows_sys::Win32::Graphics::Printing::{EnumJobsW, JOB_INFO_1W};
+
+    let handle = WindowsPrinterHandle::open(printer_name)?;
+    let mut needed = 0;
+    let mut returned = 0;
+    unsafe {
+        EnumJobsW(
+            handle.0,
+            0,
+            u32::MAX,
+            1,
+            ptr::null_mut(),
+            0,
+            &mut needed,
+            &mut returned,
+        );
+    }
+    if needed == 0 {
+        return Ok(HashSet::new());
+    }
+    let word_size = std::mem::size_of::<usize>();
+    let mut buffer = vec![0usize; (needed as usize).div_ceil(word_size)];
+    let success = unsafe {
+        EnumJobsW(
+            handle.0,
+            0,
+            u32::MAX,
+            1,
+            buffer.as_mut_ptr().cast(),
+            needed,
+            &mut needed,
+            &mut returned,
+        )
+    };
+    if success == 0 {
+        return Err(format!(
+            "Windows印刷キューを取得できません: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let entries = unsafe {
+        std::slice::from_raw_parts(buffer.as_ptr().cast::<JOB_INFO_1W>(), returned as usize)
+    };
+    Ok(entries.iter().map(|entry| entry.JobId).collect())
 }
 
 #[cfg(target_os = "windows")]
 fn windows_remove_job(printer_name: &str, job_id: u32) -> Result<(), String> {
-    let id = job_id.to_string();
-    powershell(
-        "Remove-PrintJob -PrinterName $env:TAURI_PRINTER_NAME -ID $env:TAURI_PRINT_JOB_ID -ErrorAction Stop",
-        &[("TAURI_PRINTER_NAME", printer_name), ("TAURI_PRINT_JOB_ID", &id)],
-    )?;
+    use std::ptr;
+    use windows_sys::Win32::Graphics::Printing::{SetJobW, JOB_CONTROL_CANCEL};
+
+    let handle = WindowsPrinterHandle::open(printer_name)?;
+    let success = unsafe { SetJobW(handle.0, job_id, 0, ptr::null(), JOB_CONTROL_CANCEL) };
+    if success == 0 {
+        return Err(format!(
+            "Windows印刷ジョブをキャンセルできません: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
-fn powershell(script: &str, envs: &[(&str, &str)]) -> Result<String, String> {
-    use std::os::windows::process::CommandExt;
-    let mut command = Command::new("powershell.exe");
-    command
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            script,
-        ])
-        .creation_flags(0x08000000);
-    command.envs(envs.iter().copied());
-    let output = command
-        .output()
-        .map_err(|error| format!("Windows印刷APIを起動できません: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "Windows印刷APIが失敗しました: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+struct WindowsPrinterHandle(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(target_os = "windows")]
+impl WindowsPrinterHandle {
+    fn open(printer_name: &str) -> Result<Self, String> {
+        use std::{ffi::OsStr, os::windows::ffi::OsStrExt, ptr};
+        use windows_sys::Win32::Graphics::Printing::OpenPrinterW;
+
+        let name = OsStr::new(printer_name)
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let mut handle = ptr::null_mut();
+        if unsafe { OpenPrinterW(name.as_ptr(), &mut handle, ptr::null()) } == 0 {
+            return Err(format!(
+                "Windowsプリンターを開けません: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(Self(handle))
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsPrinterHandle {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Graphics::Printing::ClosePrinter(self.0);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn wide_ptr_string(value: *const u16) -> String {
+    if value.is_null() {
+        return String::new();
+    }
+    let mut length = 0;
+    while unsafe { *value.add(length) } != 0 {
+        length += 1;
+    }
+    String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(value, length) })
 }
 
 #[cfg(target_os = "windows")]
