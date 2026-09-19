@@ -207,7 +207,10 @@ fn temporary_pdf_path(id: &str) -> PathBuf {
 
 #[cfg(target_os = "windows")]
 fn platform_list_printers() -> Result<Vec<PrinterInfo>, String> {
-    let script = "$OutputEncoding=[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); Get-CimInstance Win32_Printer | Sort-Object Name | ForEach-Object { '{0}`t{1}`t{2}' -f $_.Name,$_.Default,$_.WorkOffline }";
+    // Win32_Printer (CIM/WMI) can fail after a local Windows account is renamed
+    // because the provider attempts an obsolete account/SID lookup. Get-Printer
+    // does not have that dependency. The per-user default is stored separately.
+    let script = "$OutputEncoding=[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); $device=(Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Windows' -Name Device -ErrorAction SilentlyContinue).Device; $default=($device -split ',')[0]; Get-Printer | Sort-Object Name | ForEach-Object { '{0}`t{1}`t{2}' -f $_.Name,($_.Name -eq $default),($_.PrinterStatus -eq 'Offline') }";
     let output = powershell(script, &[])?;
     Ok(output
         .lines()
