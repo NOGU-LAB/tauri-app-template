@@ -283,7 +283,7 @@ fn platform_list_printers() -> Result<Vec<PrinterInfo>, String> {
             })
         })
         .collect::<Vec<_>>();
-    printers.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    printers.sort_by_key(|printer| printer.name.to_lowercase());
     Ok(printers)
 }
 
