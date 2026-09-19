@@ -2,8 +2,8 @@ package sqlite
 
 import (
 	"backend/model"
+	"backend/repository"
 	"database/sql"
-	"errors"
 )
 
 type UserRepository struct {
@@ -18,8 +18,8 @@ func (r *UserRepository) FindByID(id int) (*model.User, error) {
 	row := r.db.QueryRow(`SELECT id, name, email FROM users WHERE id = ?`, id)
 	u := &model.User{}
 	if err := row.Scan(&u.ID, &u.Name, &u.Email); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("user not found")
+		if err == sql.ErrNoRows {
+			return nil, repository.ErrNotFound
 		}
 		return nil, err
 	}
@@ -50,12 +50,25 @@ func (r *UserRepository) Save(user *model.User) error {
 		if err != nil {
 			return err
 		}
-		id, _ := res.LastInsertId()
+		id, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
 		user.ID = int(id)
 		return nil
 	}
-	_, err := r.db.Exec(`UPDATE users SET name = ?, email = ? WHERE id = ?`, user.Name, user.Email, user.ID)
-	return err
+	res, err := r.db.Exec(`UPDATE users SET name = ?, email = ? WHERE id = ?`, user.Name, user.Email, user.ID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return repository.ErrNotFound
+	}
+	return nil
 }
 
 func (r *UserRepository) Delete(id int) error {
@@ -63,9 +76,12 @@ func (r *UserRepository) Delete(id int) error {
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n == 0 {
-		return errors.New("user not found")
+		return repository.ErrNotFound
 	}
 	return nil
 }

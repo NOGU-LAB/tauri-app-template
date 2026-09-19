@@ -4,7 +4,7 @@ tmp_dir = "tmp"
 
 [build]
   cmd = "go build -o ./tmp/backend ."
-  bin = "./tmp/backend"
+  entrypoint = ["./tmp/backend"]
   delay = 500
   exclude_dir = ["tmp"]
   include_ext = ["go"]

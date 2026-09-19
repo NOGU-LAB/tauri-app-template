@@ -25,7 +25,7 @@ graph TB
         end
 
         subgraph Frontend["フロントエンド (Vite + React)"]
-            Hook["useBackend hook\nポート受け取り"]
+            Hook["useBackend hook\n接続情報受け取り"]
             UI["App.tsx\nBootstrap UI"]
         end
 
@@ -33,19 +33,19 @@ graph TB
             Handler["Handler層\nHTTP入出力"]
             Service["Service層\nビジネスロジック"]
             Repository["Repository層\nデータアクセスI/F"]
-            MemRepo["memory.Repository\n(現在の実装)"]
-            DBRepo["sqlite / postgres\n(差し替え予定)"]
+            MemRepo["memory.Repository\n(テスト・開発用)"]
+            DBRepo["sqlite.Repository\n(デスクトップ既定)"]
         end
     end
 
     TauriCore -->|"spawn + stdout監視"| GoBackend
-    TauriCore -->|"backend-ready event\n(port番号)"| Hook
+    TauriCore -->|"backend-ready event\n(port + token)"| Hook
     Hook --> UI
-    UI -->|"HTTP fetch\nlocalhost:PORT"| Handler
+    UI -->|"認証付きHTTP fetch\n127.0.0.1:PORT"| Handler
     Handler --> Service
     Service --> Repository
-    Repository --> MemRepo
-    Repository -.->|"将来差し替え"| DBRepo
+    Repository -.-> MemRepo
+    Repository --> DBRepo
 ```
 
 ---
@@ -59,12 +59,13 @@ sequenceDiagram
     participant R as React フロントエンド
 
     T->>G: サイドカーとして spawn
-    G->>G: net.Listen(":0") で空きポート取得
-    G-->>T: stdout: "PORT:53938"
+    G->>G: 127.0.0.1:0 で空きポート取得
+    G->>G: 起動ごとの認証トークン生成
+    G-->>T: stdout: "BACKEND_READY:53938:token"
     T->>T: stdout を監視・パース
-    T-->>R: emit("backend-ready", 53938)
-    R->>R: apiBase = "http://localhost:53938"
-    R->>G: HTTP fetch (apiBase/api/...)
+    T-->>R: emit("backend-ready", {port, token})
+    R->>R: apiBase = "http://127.0.0.1:53938"
+    R->>G: HTTP fetch + X-Backend-Token
     G-->>R: JSON レスポンス
 ```
 
@@ -118,7 +119,7 @@ classDiagram
     UserHandler --> UserService
     UserService --> UserRepository
     UserRepository <|.. InMemoryUserRepository : implements
-    UserRepository <|.. SQLiteUserRepository : implements (予定)
+    UserRepository <|.. SQLiteUserRepository : implements
 ```
 
 ---
@@ -133,9 +134,9 @@ flowchart LR
         D2 --> D3["Vite dev server\nHMR有効"]
         D2 --> D4["Goサイドカー起動\n動的ポート"]
 
-        subgraph HotReload["ホットリロード (Option A)"]
-            H1["npm run backend:air\nDEV_PORT=8765 固定"] 
-            H2["npm run tauri dev"]
+        subgraph HotReload["Goホットリロード"]
+            H1["npm run dev:hot"]
+            H1 --> H2["air + Tauri dev\n一括起動"]
         end
     end
 
@@ -146,7 +147,7 @@ flowchart LR
         P1 --> P4["Vite build\nフロント最適化"]
         P3 --> P5["Tauri bundle\n全部同梱"]
         P4 --> P5
-        P5 --> P6[".app / .dmg\n.exe / .msi"]
+        P5 --> P6[".app / .dmg\n.exe (NSIS)\n.deb / .rpm / AppImage"]
     end
 ```
 
@@ -200,35 +201,45 @@ Handler  →  Service  →  Repository (interface)
 
 ### 2. DB未定でも開発を進める
 
-`memory.InMemoryRepository` を差し込むことで、DBが決まる前からアプリケーションロジックを開発できる。
-DBが決まったら `repository/sqlite/` などを追加し、`main.go` の1行を変えるだけで差し替え完了。
+`memory.InMemoryRepository` を差し込むことで、DBなしでもサービスやハンドラーをテストできる。
+デスクトップアプリはTauriが `--db` を渡すため、既定ではSQLiteへ永続化する。
 
 ```go
 // main.go — ここだけ変える
+// --db なし（テスト・単体起動）
 userRepo := memory.NewUserRepository()
-// userRepo := sqlite.NewUserRepository(db)
+// --db あり（Tauriからの通常起動）
+userRepo := sqlite.NewUserRepository(db)
 ```
 
 ### 3. 動的ポートによるポート衝突回避
 
-本番環境では `net.Listen(":0")` でOSに空きポートを割り当てさせる。
+本番環境では `net.Listen("tcp4", "127.0.0.1:0")` でOSに空きポートを割り当てさせる。
 固定ポートにしないことでポート競合が起きない。複数インスタンス起動も安全。
 
 ### 4. stdout経由のプロセス間通知
 
 TauriサイドカーはGoプロセスのstdoutを直接読める。
-ポート番号を `PORT:xxxxx` 形式でstdoutに出力し、Rustコアがキャッチしてフロントにeventを飛ばす。
+ポート番号と起動ごとの認証トークンを `BACKEND_READY:port:token` 形式でstdoutに出力し、Rustコアがキャッチしてフロントにeventを飛ばす。
 HTTPサーバーや共有ファイルを使わないシンプルな起動通知。
 
 ### 5. フロントエンドはバックエンドの存在を意識しない
 
-`useBackend` フックがポート受け取りとapiBaseの管理を隠蔽する。
-各コンポーネントは `apiBase` を受け取るだけで、Tauriのイベント仕組みを知る必要がない。
+`useBackend` フックが接続情報とバックエンド異常終了を管理する。
+APIリクエストは `src/api.ts` が認証ヘッダー、HTTPエラー、JSON処理を共通化する。
 
-### 6. 本番ビルドはコマンド1つ
+### 6. ローカルAPIの防御
+
+- 待ち受けは `127.0.0.1` のみに限定
+- 起動ごとのランダムトークンを全APIで検証
+- CORSはTauriとローカル開発用originだけを許可
+- リクエストサイズ、JSON形式、入力値、HTTPタイムアウトを検証
+- TauriのCSPを有効化し、フロントエンドのshell権限を付与しない
+
+### 7. 本番ビルドはコマンド1つ
 
 `npm run tauri build` だけで以下がすべて自動実行される。
-- Goバイナリのクロスコンパイル (`build-backend.sh`)
+- Tauriターゲットに対応したGoバイナリのビルド (`build-backend.sh` / `build-backend.ps1`)
 - Viteによるフロントエンドのバンドル
 - TauriによるGoバイナリ同梱 + インストーラ生成
 
@@ -238,10 +249,10 @@ HTTPサーバーや共有ファイルを使わないシンプルな起動通知�
 
 ### 必要なもの
 
-- [Node.js](https://nodejs.org/) v18+
-- [Go](https://go.dev/) v1.21+
+- [Node.js](https://nodejs.org/) v20.19+ または v22.12+
+- [Go](https://go.dev/) v1.25+
 - [Rust](https://www.rust-lang.org/) (rustup)
-- [air](https://github.com/air-verse/air)（Goホットリロード、任意）: `go install github.com/air-verse/air@latest`
+- [air](https://github.com/air-verse/air)（Goホットリロード、任意）: `go install github.com/air-verse/air@v1.66.0`
 
 ### インストール
 
@@ -263,21 +274,16 @@ npm install
 npm run tauri dev
 ```
 
-### Goホットリロードあり（Option A）
+### Goホットリロードあり
 
 Goファイルを変えるたびに自動リビルド・再起動したい場合：
 
 ```bash
-# ターミナル1: Go（air でホットリロード、固定ポート8765）
-npm run backend:air
-
-# ターミナル2: Tauri（Viteフロント + Rustコア）
-npm run tauri dev
+npm run dev:hot
 ```
 
-> **Note:** `backend:air` は `DEV_PORT=8765` の固定ポートで起動する。  
-> Tauriサイドカーとは別プロセスになるため `backend-ready` イベントは飛ばない。  
-> フロントは `http://localhost:8765` に直接fetchすること（開発時の割り切り）。
+`air` と Tauri dev を一括起動し、開発専用の固定ポートとトークンを両方へ渡す。
+本番ビルドでは外部バックエンド用の環境変数は無視され、必ず同梱サイドカーを使う。
 
 ---
 
@@ -430,7 +436,7 @@ NSIS と MSI は同時生成可能だが、productName が非 ASCII だと WiX (
 `backend/repository/` に新しい実装を追加し、`backend/main.go` のDI箇所を変更するだけ：
 
 ```go
-// main.go
-// userRepo := memory.NewUserRepository()   ← 現在
-userRepo := sqlite.NewUserRepository(db)    // ← 差し替え後
+// main.go の buildUserService
+// Tauriからは --db が渡るためSQLiteが既定
+return service.NewUserService(sqlite.NewUserRepository(db)), nil
 ```

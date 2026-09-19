@@ -6,13 +6,27 @@ import (
 	"backend/repository/memory"
 	"backend/repository/sqlite"
 	"backend/service"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 )
+
+const backendTokenHeader = "X-Backend-Token"
+
+var allowedOrigins = map[string]struct{}{
+	"tauri://localhost":       {},
+	"http://tauri.localhost":  {},
+	"https://tauri.localhost": {},
+	"http://localhost:1420":   {},
+	"http://127.0.0.1:1420":   {},
+}
 
 func main() {
 	dbPath := flag.String("db", "", "SQLiteファイルパス（省略時はインメモリ）")
@@ -55,12 +69,26 @@ func main() {
 
 	userHandler := handler.NewUserHandler(userService)
 	mux := newServer(userHandler)
+	token, err := resolveAuthToken()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "認証トークン生成エラー: %v\n", err)
+		os.Exit(1)
+	}
+	server := &http.Server{
+		Handler:           securityMiddleware(mux, token),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
-	// Tauriがstdoutを読んでフロントにポートを通知する
-	fmt.Printf("PORT:%d\n", port)
-	os.Stdout.Sync()
+	// Tauriがstdoutを読んでフロントに接続情報を通知する。
+	// トークンは起動ごとに生成し、localhost上の別プロセスやWebページからの
+	// API呼び出しを防ぐ。
+	fmt.Printf("BACKEND_READY:%d:%s\n", port, token)
+	_ = os.Stdout.Sync()
 
-	if err := http.Serve(ln, corsMiddleware(mux)); err != nil {
+	if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintf(os.Stderr, "サーバー起動エラー: %v\n", err)
 		os.Exit(1)
 	}
@@ -82,23 +110,54 @@ func buildUserService(dbPath string) (*service.UserService, error) {
 // listener を握ったまま http.Serve に渡すことで、PORT 通知 → 初回 fetch の
 // 間に accept が立ち上がっていないレースを排除する。
 func resolveListener() (net.Listener, error) {
-	addr := ":0"
+	port := "0"
 	if p := os.Getenv("DEV_PORT"); p != "" {
-		if _, err := strconv.Atoi(p); err != nil {
+		value, err := strconv.Atoi(p)
+		if err != nil || value < 1 || value > 65535 {
 			return nil, fmt.Errorf("DEV_PORT の値が不正です: %s", p)
 		}
-		addr = ":" + p
+		port = p
 	}
-	return net.Listen("tcp", addr)
+	return net.Listen("tcp4", net.JoinHostPort("127.0.0.1", port))
 }
 
-func corsMiddleware(next http.Handler) http.Handler {
+func newAuthToken() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func resolveAuthToken() (string, error) {
+	if os.Getenv("DEV_PORT") != "" {
+		if token := os.Getenv("DEV_BACKEND_TOKEN"); len(token) >= 16 {
+			return token, nil
+		}
+	}
+	return newAuthToken()
+}
+
+func securityMiddleware(next http.Handler, token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			if _, ok := allowedOrigins[origin]; !ok {
+				writeServerJSONError(w, http.StatusForbidden, "origin not allowed")
+				return
+			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, "+backendTokenHeader)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		providedToken := r.Header.Get(backendTokenHeader)
+		if subtle.ConstantTimeCompare([]byte(providedToken), []byte(token)) != 1 {
+			writeServerJSONError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next.ServeHTTP(w, r)

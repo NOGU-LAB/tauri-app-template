@@ -2,7 +2,8 @@ package memory
 
 import (
 	"backend/model"
-	"errors"
+	"backend/repository"
+	"sort"
 	"sync"
 )
 
@@ -25,9 +26,10 @@ func (r *InMemoryUserRepository) FindByID(id int) (*model.User, error) {
 
 	user, ok := r.data[id]
 	if !ok {
-		return nil, errors.New("user not found")
+		return nil, repository.ErrNotFound
 	}
-	return user, nil
+	copy := *user
+	return &copy, nil
 }
 
 func (r *InMemoryUserRepository) FindAll() ([]*model.User, error) {
@@ -35,8 +37,14 @@ func (r *InMemoryUserRepository) FindAll() ([]*model.User, error) {
 	defer r.mu.RUnlock()
 
 	users := make([]*model.User, 0, len(r.data))
-	for _, u := range r.data {
-		users = append(users, u)
+	ids := make([]int, 0, len(r.data))
+	for id := range r.data {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	for _, id := range ids {
+		copy := *r.data[id]
+		users = append(users, &copy)
 	}
 	return users, nil
 }
@@ -48,8 +56,11 @@ func (r *InMemoryUserRepository) Save(user *model.User) error {
 	if user.ID == 0 {
 		r.counter++
 		user.ID = r.counter
+	} else if _, ok := r.data[user.ID]; !ok {
+		return repository.ErrNotFound
 	}
-	r.data[user.ID] = user
+	copy := *user
+	r.data[user.ID] = &copy
 	return nil
 }
 
@@ -58,7 +69,7 @@ func (r *InMemoryUserRepository) Delete(id int) error {
 	defer r.mu.Unlock()
 
 	if _, ok := r.data[id]; !ok {
-		return errors.New("user not found")
+		return repository.ErrNotFound
 	}
 	delete(r.data, id)
 	return nil
