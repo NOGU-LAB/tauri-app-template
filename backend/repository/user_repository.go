@@ -1,6 +1,11 @@
 package repository
 
-import "backend/model"
+import (
+	"backend/model"
+	"errors"
+)
+
+var ErrNotFound = errors.New("user not found")
 
 // UserRepository はユーザーデータへのアクセスを抽象化するインターフェース
 type UserRepository interface {

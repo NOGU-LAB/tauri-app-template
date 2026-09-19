@@ -38,7 +38,8 @@ Handler → Service → Repository (interface)
 ### Handler
 - `ServeHTTP` でパスとメソッドをswitch分岐
 - 正常系: 適切なHTTPステータス + JSON
-- エラー系: `http.Error` でメッセージ返却
+- エラー系: JSONの `{"error":"..."}` と適切なステータスを返す
+- リクエストサイズ、Content-Type、未知フィールド、入力値を検証する
 
 ### DB（SQLite）
 - テーブル追加は `backend/infra/db.go` の `NewSQLite()` 内にマイグレーションSQLを追記
@@ -65,10 +66,20 @@ npm run tauri build
 
 ## Tauriとの連携
 
-- Goサイドカーは `net.Listen(":0")` で空きポートを取得し、`PORT:xxxxx` をstdoutに出力
-- Rust (`lib.rs`) がstdoutを監視してポートをReactに `backend-ready` イベントで通知
-- Reactの `useBackend` フックがポートを受け取り `apiBase` を設定
+- Goサイドカーは `127.0.0.1:0` で空きポートを取得し、起動ごとの認証トークンを生成
+- `BACKEND_READY:port:token` をstdoutへ出し、Rustが `backend-ready` イベントでReactへ通知
+- Reactの `useBackend` が接続情報を保持し、`src/api.ts` が `X-Backend-Token` を全APIリクエストへ付与
 - DBパスは Tauri の `app_data_dir()` → `--db` フラグ経由でGoに渡す
+- サイドカーが異常終了したら `backend-error` を通知し、無限ローディングにしない
+
+## セキュリティルール
+
+- GoのHTTPサーバーを `0.0.0.0` / `:PORT` で待ち受けない
+- CORSの `Access-Control-Allow-Origin: *` を使用しない
+- TauriのCSPを無効化しない
+- JavaScript側へshell権限を付与しない。サイドカーはRust側から起動する
+- releaseビルドで外部バックエンド接続用の環境変数を使用しない
+- API追加時は認証middleware配下へ置き、正常系・入力不正・認証失敗のテストを追加する
 
 ## Windows対応
 

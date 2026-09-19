@@ -12,13 +12,47 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "tauri-app",
-        "width": 800,
-        "height": 600
+        "width": 940,
+        "height": 760,
+        "minWidth": 720,
+        "minHeight": 620,
+        "backgroundThrottling": "disabled",
+        "visible": false
+      },
+      {
+        "label": "splashscreen",
+        "title": "tauri-app",
+        "url": "splashscreen.html",
+        "width": 420,
+        "height": 240,
+        "center": true,
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": "'self' customprotocol: asset:",
+        "connect-src": "ipc: http://ipc.localhost http://127.0.0.1:*",
+        "font-src": "'self' data:",
+        "img-src": "'self' asset: http://asset.localhost data:",
+        "frame-src": "'self' blob:",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'"
+      },
+      "devCsp": {
+        "default-src": "'self' customprotocol: asset: http://localhost:1420",
+        "connect-src": "ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:1420 ws://localhost:1421",
+        "font-src": "'self' data:",
+        "img-src": "'self' asset: http://asset.localhost data:",
+        "frame-src": "'self' blob:",
+        "script-src": "'self' 'unsafe-eval' http://localhost:1420",
+        "style-src": "'self' 'unsafe-inline' http://localhost:1420"
+      },
+      "freezePrototype": true
     }
   },
   "bundle": {

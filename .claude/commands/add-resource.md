@@ -55,7 +55,8 @@ func New{Resource}Service(repo repository.{Resource}Repository) *{Resource}Servi
 - `ServeHTTP` でパス・メソッドをswitch分岐
 - `/api/{resource}s` GET → 一覧、POST → 作成
 - `/api/{resource}s/{id}` GET → 1件、DELETE → 削除
-- リクエストボディは `json.NewDecoder(r.Body).Decode()`
+- リクエストボディはサイズ制限を設け、JSON Content-Type、未知フィールド、複数JSON値を拒否する
+- Service層で必須項目や形式を検証する
 - レスポンスは `json.NewEncoder(w).Encode()`
 
 ## 更新するファイル
@@ -78,3 +79,6 @@ mux.Handle("/api/{resource}s/", {resource}Handler)
 - User リソース（`backend/repository/memory/user_repository.go` など）を参照パターンとして使うこと
 - `modernc.org/sqlite` はCGO不要なのでビルド設定変更は不要
 - 追加後は `./build-backend.sh` でGoバイナリを再ビルドすること
+- `repository.ErrNotFound` のようなsentinel errorを使い、文字列比較でエラー種別を判定しないこと
+- 新しいルートは既存の認証・CORS middlewareの内側に置くこと
+- Handler / Service / Repository のテストを追加し、`go test -race ./...` と `go vet ./...` を通すこと

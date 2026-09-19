@@ -1,0 +1,5 @@
+[
+  { "sku": "A-100", "name": "Keyboard", "stock": 12 },
+  { "sku": "B-200", "name": "Mouse", "stock": 24 },
+  { "sku": "C-300", "name": "Printer", "stock": 3 }
+]

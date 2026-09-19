@@ -3,6 +3,14 @@ package service
 import (
 	"backend/model"
 	"backend/repository"
+	"errors"
+	"net/mail"
+	"strings"
+)
+
+var (
+	ErrInvalidName  = errors.New("name is required")
+	ErrInvalidEmail = errors.New("email is invalid")
 )
 
 type UserService struct {
@@ -22,6 +30,15 @@ func (s *UserService) GetAllUsers() ([]*model.User, error) {
 }
 
 func (s *UserService) CreateUser(name, email string) (*model.User, error) {
+	name = strings.TrimSpace(name)
+	email = strings.TrimSpace(email)
+	if name == "" {
+		return nil, ErrInvalidName
+	}
+	address, err := mail.ParseAddress(email)
+	if err != nil || address.Address != email {
+		return nil, ErrInvalidEmail
+	}
 	user := &model.User{Name: name, Email: email}
 	if err := s.repo.Save(user); err != nil {
 		return nil, err

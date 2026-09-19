@@ -2,6 +2,36 @@
 
 Tauri + Vite/React + Go のデスクトップアプリテンプレート。
 
+起動後の `Desktop Showcase` では、デスクトップアプリ固有の処理を一連の流れで試せる。
+
+- Rust製ネイティブダイアログ、CSV/JSON選択、ドラッグ＆ドロップ
+- Goバックグラウンドジョブ、進捗ポーリング、キャンセル
+- Rust製保存ダイアログと、最小化・非表示時のOS通知
+- Goバックエンドの準備完了まで表示するスプラッシュウィンドウ（15秒の起動監視付き）
+
+動作確認には `samples/people.csv` と `samples/inventory.json` を利用できる。
+macOSではメインWebViewのバックグラウンド停止を無効化し、ウィンドウを隠した後も進捗確認と完了通知が継続する。
+
+`Printer` タブでは次の流れを確認できる。
+
+1. RustがOSのプリンターを列挙し、既定・オフライン状態を表示
+2. Goサイドカーが依存ライブラリなしでA4のサンプルPDF帳票を生成
+3. React内のPDFプレビュー（この操作では印刷ジョブを投入しない）
+4. Rustが選択したOSプリンターへPDFを投入
+5. OS印刷キューの処理中・完了・失敗をReactへ反映
+6. macOS/Linuxでは、OSキューに残っている間のベストエフォートなキャンセル
+
+WindowsはPDFファイルに登録された `printto` ハンドラーを利用するため、PDFを扱えるアプリ（Microsoft EdgeやAdobe Acrobatなど）が必要。「Microsoft Print to PDF」ではWindowsの保存先ダイアログが表示される。`printto` は投入したスプーラージョブIDを返さず、同じプリンターへ他アプリから投入されたジョブと安全に区別できないため、Windowsではアプリ内キャンセルを提供しない。macOS/LinuxはCUPSの `lp`、`lpstat`、`cancel` を利用し、取得したリクエストIDのジョブだけをキャンセルする。
+
+`QR Reader` タブではUSBシリアル（CDC）型のQR／バーコードリーダーを列挙し、Rustで受信した値をReactへリアルタイム表示できる。候補機器は製品名から自動選択され、ポートの再検出、接続・切断、ボーレート変更、直近100件の履歴表示に対応する。切断時は読み取りスレッドがポートを解放するまで待つため、同じポートへすぐ再接続できる。読み取った内容は自動実行せず文字列としてのみ扱う。
+
+Go側だけで帳票を生成する場合:
+
+```bash
+cd backend
+go run ./cmd/sample-report ../sample-report.pdf
+```
+
 ## 技術スタック
 
 | レイヤー | 技術 |
@@ -21,31 +51,33 @@ Tauri + Vite/React + Go のデスクトップアプリテンプレート。
 graph TB
     subgraph Desktop App
         subgraph Tauri["Tauri v2 (Rust コア)"]
-            TauriCore["lib.rs\nサイドカー起動\nイベント中継"]
+            TauriCore["lib.rs\nサイドカー起動\nファイル/通知/スプラッシュ"]
         end
 
         subgraph Frontend["フロントエンド (Vite + React)"]
-            Hook["useBackend hook\nポート受け取り"]
+            Hook["useBackend hook\n接続情報受け取り"]
             UI["App.tsx\nBootstrap UI"]
         end
 
         subgraph GoBackend["Go バックエンド (サイドカー)"]
             Handler["Handler層\nHTTP入出力"]
             Service["Service層\nビジネスロジック"]
+            Job["JobService\n進捗/キャンセル"]
             Repository["Repository層\nデータアクセスI/F"]
-            MemRepo["memory.Repository\n(現在の実装)"]
-            DBRepo["sqlite / postgres\n(差し替え予定)"]
+            MemRepo["memory.Repository\n(テスト・開発用)"]
+            DBRepo["sqlite.Repository\n(デスクトップ既定)"]
         end
     end
 
     TauriCore -->|"spawn + stdout監視"| GoBackend
-    TauriCore -->|"backend-ready event\n(port番号)"| Hook
+    TauriCore -->|"backend-ready event\n(port + token)"| Hook
     Hook --> UI
-    UI -->|"HTTP fetch\nlocalhost:PORT"| Handler
+    UI -->|"認証付きHTTP fetch\n127.0.0.1:PORT"| Handler
     Handler --> Service
+    Handler --> Job
     Service --> Repository
-    Repository --> MemRepo
-    Repository -.->|"将来差し替え"| DBRepo
+    Repository -.-> MemRepo
+    Repository --> DBRepo
 ```
 
 ---
@@ -59,12 +91,13 @@ sequenceDiagram
     participant R as React フロントエンド
 
     T->>G: サイドカーとして spawn
-    G->>G: net.Listen(":0") で空きポート取得
-    G-->>T: stdout: "PORT:53938"
+    G->>G: 127.0.0.1:0 で空きポート取得
+    G->>G: 起動ごとの認証トークン生成
+    G-->>T: stdout: "BACKEND_READY:53938:token"
     T->>T: stdout を監視・パース
-    T-->>R: emit("backend-ready", 53938)
-    R->>R: apiBase = "http://localhost:53938"
-    R->>G: HTTP fetch (apiBase/api/...)
+    T-->>R: emit("backend-ready", {port, token})
+    R->>R: apiBase = "http://127.0.0.1:53938"
+    R->>G: HTTP fetch + X-Backend-Token
     G-->>R: JSON レスポンス
 ```
 
@@ -118,7 +151,7 @@ classDiagram
     UserHandler --> UserService
     UserService --> UserRepository
     UserRepository <|.. InMemoryUserRepository : implements
-    UserRepository <|.. SQLiteUserRepository : implements (予定)
+    UserRepository <|.. SQLiteUserRepository : implements
 ```
 
 ---
@@ -133,9 +166,9 @@ flowchart LR
         D2 --> D3["Vite dev server\nHMR有効"]
         D2 --> D4["Goサイドカー起動\n動的ポート"]
 
-        subgraph HotReload["ホットリロード (Option A)"]
-            H1["npm run backend:air\nDEV_PORT=8765 固定"] 
-            H2["npm run tauri dev"]
+        subgraph HotReload["Goホットリロード"]
+            H1["npm run dev:hot"]
+            H1 --> H2["air + Tauri dev\n一括起動"]
         end
     end
 
@@ -146,7 +179,7 @@ flowchart LR
         P1 --> P4["Vite build\nフロント最適化"]
         P3 --> P5["Tauri bundle\n全部同梱"]
         P4 --> P5
-        P5 --> P6[".app / .dmg\n.exe / .msi"]
+        P5 --> P6[".app / .dmg\n.exe (NSIS)\n.deb / .rpm / AppImage"]
     end
 ```
 
@@ -158,9 +191,14 @@ flowchart LR
 tauri-app/
 ├── src/                          # Vite + React フロントエンド
 │   ├── hooks/useBackend.ts       # バックエンドポート受け取りフック
-│   └── App.tsx                   # メインUI
+│   ├── components/DesktopDemo.tsx # ファイル・ジョブのデモUI
+│   ├── components/PrinterDemo.tsx # PDFプレビュー・印刷ジョブUI
+│   ├── components/QrReaderDemo.tsx # USB QRリーダー・受信履歴UI
+│   └── App.tsx                   # 画面切り替え
 ├── src-tauri/                    # Tauri (Rust コア)
 │   ├── src/lib.rs                # Goサイドカー起動 + ポートをフロントへ送信
+│   ├── src/printing.rs           # OSプリンター列挙・印刷キュー操作
+│   ├── src/qr_reader.rs          # USBシリアル列挙・QR受信イベント
 │   ├── binaries/                 # ビルド済みGoバイナリ置き場
 │   ├── capabilities/default.json # Tauriパーミッション設定
 │   ├── tauri.conf.json           # Tauriアプリ設定（共通）
@@ -176,6 +214,8 @@ tauri-app/
 │   ├── infra/db.go               # SQLite接続・マイグレーション
 │   ├── model/                    # データ構造体
 │   └── .air.toml                 # air（ホットリロード）設定
+├── public/                       # スプラッシュ画面
+├── samples/                      # CSV/JSON動作確認データ
 ├── build-backend.sh              # Goビルドスクリプト（macOS/Linux）
 └── build-backend.ps1             # Goビルドスクリプト（Windows PowerShell）
 ```
@@ -200,35 +240,45 @@ Handler  →  Service  →  Repository (interface)
 
 ### 2. DB未定でも開発を進める
 
-`memory.InMemoryRepository` を差し込むことで、DBが決まる前からアプリケーションロジックを開発できる。
-DBが決まったら `repository/sqlite/` などを追加し、`main.go` の1行を変えるだけで差し替え完了。
+`memory.InMemoryRepository` を差し込むことで、DBなしでもサービスやハンドラーをテストできる。
+デスクトップアプリはTauriが `--db` を渡すため、既定ではSQLiteへ永続化する。
 
 ```go
 // main.go — ここだけ変える
+// --db なし（テスト・単体起動）
 userRepo := memory.NewUserRepository()
-// userRepo := sqlite.NewUserRepository(db)
+// --db あり（Tauriからの通常起動）
+userRepo := sqlite.NewUserRepository(db)
 ```
 
 ### 3. 動的ポートによるポート衝突回避
 
-本番環境では `net.Listen(":0")` でOSに空きポートを割り当てさせる。
+本番環境では `net.Listen("tcp4", "127.0.0.1:0")` でOSに空きポートを割り当てさせる。
 固定ポートにしないことでポート競合が起きない。複数インスタンス起動も安全。
 
 ### 4. stdout経由のプロセス間通知
 
 TauriサイドカーはGoプロセスのstdoutを直接読める。
-ポート番号を `PORT:xxxxx` 形式でstdoutに出力し、Rustコアがキャッチしてフロントにeventを飛ばす。
+ポート番号と起動ごとの認証トークンを `BACKEND_READY:port:token` 形式でstdoutに出力し、Rustコアがキャッチしてフロントにeventを飛ばす。
 HTTPサーバーや共有ファイルを使わないシンプルな起動通知。
 
 ### 5. フロントエンドはバックエンドの存在を意識しない
 
-`useBackend` フックがポート受け取りとapiBaseの管理を隠蔽する。
-各コンポーネントは `apiBase` を受け取るだけで、Tauriのイベント仕組みを知る必要がない。
+`useBackend` フックが接続情報とバックエンド異常終了を管理する。
+APIリクエストは `src/api.ts` が認証ヘッダー、HTTPエラー、JSON処理を共通化する。
 
-### 6. 本番ビルドはコマンド1つ
+### 6. ローカルAPIの防御
+
+- 待ち受けは `127.0.0.1` のみに限定
+- 起動ごとのランダムトークンを全APIで検証
+- CORSはTauriとローカル開発用originだけを許可
+- リクエストサイズ、JSON形式、入力値、HTTPタイムアウトを検証
+- TauriのCSPを有効化し、フロントエンドのshell権限を付与しない
+
+### 7. 本番ビルドはコマンド1つ
 
 `npm run tauri build` だけで以下がすべて自動実行される。
-- Goバイナリのクロスコンパイル (`build-backend.sh`)
+- Tauriターゲットに対応したGoバイナリのビルド (`build-backend.sh` / `build-backend.ps1`)
 - Viteによるフロントエンドのバンドル
 - TauriによるGoバイナリ同梱 + インストーラ生成
 
@@ -238,10 +288,10 @@ HTTPサーバーや共有ファイルを使わないシンプルな起動通知�
 
 ### 必要なもの
 
-- [Node.js](https://nodejs.org/) v18+
-- [Go](https://go.dev/) v1.21+
+- [Node.js](https://nodejs.org/) v20.19+ または v22.12+
+- [Go](https://go.dev/) v1.25+
 - [Rust](https://www.rust-lang.org/) (rustup)
-- [air](https://github.com/air-verse/air)（Goホットリロード、任意）: `go install github.com/air-verse/air@latest`
+- [air](https://github.com/air-verse/air)（Goホットリロード、任意）: `go install github.com/air-verse/air@v1.66.0`
 
 ### インストール
 
@@ -263,21 +313,37 @@ npm install
 npm run tauri dev
 ```
 
-### Goホットリロードあり（Option A）
+### Goホットリロードあり
 
 Goファイルを変えるたびに自動リビルド・再起動したい場合：
 
 ```bash
-# ターミナル1: Go（air でホットリロード、固定ポート8765）
-npm run backend:air
-
-# ターミナル2: Tauri（Viteフロント + Rustコア）
-npm run tauri dev
+npm run dev:hot
 ```
 
-> **Note:** `backend:air` は `DEV_PORT=8765` の固定ポートで起動する。  
-> Tauriサイドカーとは別プロセスになるため `backend-ready` イベントは飛ばない。  
-> フロントは `http://localhost:8765` に直接fetchすること（開発時の割り切り）。
+`air` と Tauri dev を一括起動し、開発専用の固定ポートとトークンを両方へ渡す。
+本番ビルドのTauri側は `TAURI_EXTERNAL_BACKEND_*` を無視し、必ず同梱サイドカーを使う。
+Windowsではスクリプトが `cmd.exe` 経由で `npm.cmd` を起動するため、PowerShellの実行ポリシーに依存しない。
+
+### ローカル検証
+
+GitHub Actionsを使わずに、主要な変更を次のコマンドで確認できる。
+
+```bash
+# Go（macOS/Linuxではrace detectorも利用可能）
+cd backend
+go test -race ./...
+cd ..
+
+# Rust
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+# React / TypeScript
+npm run build
+```
+
+WindowsでCGOを無効にしている場合は `go test ./...` を利用する。
 
 ---
 
@@ -302,7 +368,6 @@ npm run tauri build
 - `src-tauri/tauri.windows.conf.json` によって `beforeBuildCommand` が自動的に `pwsh` 経由に切り替わる
 - Goバイナリのビルドには PowerShell 7 (`pwsh`) が必要
 - 出力先: `src-tauri\target\release\bundle\`
-  - `msi\tauri-app_x.x.x_x64_en-US.msi`（MSIインストーラー）
   - `nsis\tauri-app_x.x.x_x64-setup.exe`（NSISセットアップ）
 
 #### Windowsの事前準備
@@ -430,7 +495,7 @@ NSIS と MSI は同時生成可能だが、productName が非 ASCII だと WiX (
 `backend/repository/` に新しい実装を追加し、`backend/main.go` のDI箇所を変更するだけ：
 
 ```go
-// main.go
-// userRepo := memory.NewUserRepository()   ← 現在
-userRepo := sqlite.NewUserRepository(db)    // ← 差し替え後
+// main.go の buildUserService
+// Tauriからは --db が渡るためSQLiteが既定
+return service.NewUserService(sqlite.NewUserRepository(db)), nil
 ```
