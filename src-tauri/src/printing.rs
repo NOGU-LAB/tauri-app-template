@@ -455,23 +455,45 @@ fn windows_shell_print_to(path: &Path, printer_name: &str) -> Result<(), String>
 
 #[cfg(not(target_os = "windows"))]
 fn platform_list_printers() -> Result<Vec<PrinterInfo>, String> {
-    let output = Command::new("lpstat")
-        .args(["-p", "-d"])
+    // `lpstat -p` is localized by macOS even when LC_ALL=C. `-e` emits one
+    // destination name per line and is stable across UI languages.
+    let destinations = Command::new("lpstat")
+        .arg("-e")
         .output()
         .map_err(|error| format!("lpstatを起動できません: {error}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let default_name = stdout
-        .lines()
-        .find_map(|line| line.strip_prefix("system default destination: "))
+    if !destinations.status.success() {
+        return Err(format!(
+            "プリンター一覧を取得できません: {}",
+            String::from_utf8_lossy(&destinations.stderr).trim()
+        ));
+    }
+    let default_output = Command::new("lpstat")
+        .arg("-d")
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
         .unwrap_or_default();
-    Ok(stdout
+    let user_options = Command::new("lpoptions")
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_default();
+    let default_text = format!("{default_output}\n{user_options}");
+
+    Ok(String::from_utf8_lossy(&destinations.stdout)
         .lines()
         .filter_map(|line| {
-            let name = line.strip_prefix("printer ")?.split_whitespace().next()?;
+            let name = line.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let status = Command::new("lpstat")
+                .args(["-p", name])
+                .output()
+                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                .unwrap_or_default();
             Some(PrinterInfo {
                 name: name.into(),
-                is_default: name == default_name,
-                is_offline: line.contains("disabled"),
+                is_default: default_text.contains(name),
+                is_offline: status.contains(" disabled ") || status.contains("無効"),
             })
         })
         .collect())
@@ -487,6 +509,7 @@ fn platform_print_and_wait(
     let output = Command::new("lp")
         .args(["-d", printer_name])
         .arg(path)
+        .env("LC_ALL", "C")
         .output()
         .map_err(|error| format!("lpを起動できません: {error}"))?;
     if !output.status.success() {
@@ -496,27 +519,64 @@ fn platform_print_and_wait(
         ));
     }
     let response = String::from_utf8_lossy(&output.stdout);
-    let request_id = response
-        .split_whitespace()
-        .find(|part| {
-            part.rsplit_once('-')
-                .is_some_and(|(_, value)| value.parse::<u32>().is_ok())
-        })
+    let request_id = parse_cups_request_id(&response, printer_name)
         .ok_or_else(|| format!("印刷ジョブIDを取得できません: {}", response.trim()))?
         .to_string();
     for _ in 0..240 {
         if is_cancelled(app, id) {
-            let _ = Command::new("cancel").arg(&request_id).output();
+            let _ = Command::new("cancel")
+                .arg(&request_id)
+                .env("LC_ALL", "C")
+                .output();
             return Ok(());
         }
         thread::sleep(Duration::from_millis(500));
         let status = Command::new("lpstat")
-            .args(["-W", "not-completed", "-o", &request_id])
+            .args(["-W", "not-completed", "-o", printer_name])
+            .env("LC_ALL", "C")
             .output()
             .map_err(|error| format!("印刷状態を取得できません: {error}"))?;
-        if status.stdout.is_empty() {
+        if !String::from_utf8_lossy(&status.stdout).contains(&request_id) {
             return Ok(());
         }
     }
     Err("印刷キューが120秒以内に完了しませんでした".into())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn parse_cups_request_id(response: &str, printer_name: &str) -> Option<String> {
+    let marker = format!("{printer_name}-");
+    let (_, suffix) = response.split_once(&marker)?;
+    let number = suffix
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    (!number.is_empty()).then(|| format!("{marker}{number}"))
+}
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod tests {
+    use super::parse_cups_request_id;
+
+    #[test]
+    fn parses_english_cups_request_id() {
+        assert_eq!(
+            parse_cups_request_id(
+                "request id is Brother_MFC_J6770CDW-542 (1 file(s))",
+                "Brother_MFC_J6770CDW"
+            ),
+            Some("Brother_MFC_J6770CDW-542".into())
+        );
+    }
+
+    #[test]
+    fn parses_japanese_cups_request_id() {
+        assert_eq!(
+            parse_cups_request_id(
+                "要求IDはBrother_MFC_J6770CDW-542です（1個のファイル）",
+                "Brother_MFC_J6770CDW"
+            ),
+            Some("Brother_MFC_J6770CDW-542".into())
+        );
+    }
 }
