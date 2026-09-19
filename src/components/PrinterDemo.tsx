@@ -64,7 +64,11 @@ export function PrinterDemo({ apiBase, token }: Props) {
       setPrinters(values);
       setSelectedPrinter((current) => {
         if (values.some((printer) => printer.name === current)) return current;
-        return values.find((printer) => printer.isDefault)?.name ?? values.find((printer) => !printer.isOffline)?.name ?? "";
+        return values.find((printer) => printer.isDefault && !printer.isOffline)?.name
+          ?? values.find((printer) => !printer.isOffline)?.name
+          ?? values.find((printer) => printer.isDefault)?.name
+          ?? values[0]?.name
+          ?? "";
       });
       setError("");
     } catch (cause) {
@@ -147,6 +151,7 @@ export function PrinterDemo({ apiBase, token }: Props) {
   }
 
   const selected = printers.find((printer) => printer.name === selectedPrinter);
+  const defaultPrinter = printers.find((printer) => printer.isDefault);
   const active = job?.status === "queued" || job?.status === "printing";
 
   return (
@@ -177,13 +182,19 @@ export function PrinterDemo({ apiBase, token }: Props) {
                 ))}
               </Form.Select>
             )}
-            {selected && <Form.Text>{selected.isDefault ? "OSの既定プリンターです。" : "OSの既定プリンターではありません。"}</Form.Text>}
+            {selected && <Form.Text>
+              {selected.isDefault
+                ? "OSの既定プリンターです。"
+                : defaultPrinter
+                  ? `OSの既定: ${defaultPrinter.name}${defaultPrinter.isOffline ? "（オフライン）" : ""}`
+                  : "OSの既定プリンターは設定されていません。"}
+            </Form.Text>}
           </Form.Group>
 
           <Stack direction="horizontal" gap={2} className="flex-wrap">
             <Button variant="outline-primary" onClick={generateReport} disabled={generating || active}>{generating ? "生成中…" : "GoでPDF生成"}</Button>
             <Button variant="outline-dark" onClick={showPreview} disabled={generating || active}>プレビューのみ</Button>
-            <Button onClick={printReport} disabled={!selectedPrinter || generating || active}>選択プリンターで印刷</Button>
+            <Button onClick={printReport} disabled={!selectedPrinter || selected?.isOffline || generating || active}>選択プリンターで印刷</Button>
             {job?.cancelable && <Button variant="outline-danger" onClick={cancelPrint}>キャンセル</Button>}
           </Stack>
 
